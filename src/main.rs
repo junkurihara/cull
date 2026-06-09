@@ -7,9 +7,18 @@
 //! sorted-free single pass over the source tree, so work scales with the
 //! unprocessed backlog rather than total generations.
 
+use std::sync::Arc;
 use triage_tool::config::{Config, RawConfig};
+use triage_tool::server::{router, AppState};
 
-fn main() {
+#[tokio::main]
+async fn main() {
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
+        )
+        .init();
+
     let cfg = match load_config() {
         Ok(cfg) => cfg,
         Err(msg) => {
@@ -18,18 +27,31 @@ fn main() {
         }
     };
 
-    // HTTP wiring (router, listener) is added in later tasks. For now report
-    // the resolved configuration so the startup path is exercised end to end.
-    println!(
-        "triage-tool: source={} keep={} trash={} order={:?} exts={:?} undo_depth={} bind={}",
-        cfg.source_dir.display(),
-        cfg.keep_dir.display(),
-        cfg.trash_dir.display(),
-        cfg.order,
-        cfg.extensions,
-        cfg.undo_depth,
-        cfg.bind_addr,
+    let bind_addr = cfg.bind_addr;
+    tracing::info!(
+        source = %cfg.source_dir.display(),
+        keep = %cfg.keep_dir.display(),
+        trash = %cfg.trash_dir.display(),
+        order = ?cfg.order,
+        undo_depth = cfg.undo_depth,
+        %bind_addr,
+        "starting triage-tool"
     );
+
+    let state = Arc::new(AppState::new(cfg));
+
+    let listener = match tokio::net::TcpListener::bind(bind_addr).await {
+        Ok(l) => l,
+        Err(e) => {
+            eprintln!("triage-tool: failed to bind {bind_addr}: {e}");
+            std::process::exit(1);
+        }
+    };
+
+    if let Err(e) = axum::serve(listener, router(state)).await {
+        eprintln!("triage-tool: server error: {e}");
+        std::process::exit(1);
+    }
 }
 
 fn load_config() -> Result<Config, String> {

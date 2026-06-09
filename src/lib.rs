@@ -9,4 +9,5 @@ pub mod config;
 pub mod meta;
 pub mod moves;
 pub mod paths;
+pub mod server;
 pub mod walk;
