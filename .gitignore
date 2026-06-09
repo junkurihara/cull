@@ -1,0 +1,18 @@
+# Build artifacts
+/target/
+
+# Working memory (design/task/fixtures); git-ignored per project rules
+/.tmp/
+
+# Rust editor backups
+**/*.rs.bk
+
+# Local env overrides
+.env
+.env.*
+!.env.example
+
+# OS noise
+.DS_Store
+
+# Cargo.lock is committed intentionally: this crate produces a binary.
