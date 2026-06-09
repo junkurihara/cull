@@ -30,6 +30,13 @@ docker run --rm \
   triage-tool
 ```
 
+Or with Docker Compose (hardened: `user 1000:1000`, `cap_drop ALL`,
+`no-new-privileges`, read-only rootfs):
+
+```sh
+COMFY_OUTPUT=/srv/enc/warm/comfyui/output docker compose up --build
+```
+
 `keep`/`trash` must sit on the **same filesystem** as the source (move is
 `rename(2)`; a cross-device move is reported as a misconfiguration, never copied).
 By default they are `$SOURCE_DIR/keep` and `$SOURCE_DIR/trash`, so mounting the
