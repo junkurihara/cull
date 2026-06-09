@@ -7,9 +7,7 @@
 //! sorted-free single pass over the source tree, so work scales with the
 //! unprocessed backlog rather than total generations.
 
-mod config;
-
-use config::{Config, RawConfig};
+use triage_tool::config::{Config, RawConfig};
 
 fn main() {
     let cfg = match load_config() {
