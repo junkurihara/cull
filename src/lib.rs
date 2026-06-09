@@ -6,6 +6,7 @@
 //! `tests/` exercise the same code paths. See `.tmp/design.md`.
 
 pub mod config;
+pub mod fixtures;
 pub mod meta;
 pub mod moves;
 pub mod paths;
