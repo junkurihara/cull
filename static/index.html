@@ -1,12 +1,484 @@
 <!doctype html>
-<html lang="en">
+<html lang="ja">
   <head>
     <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="color-scheme" content="dark" />
     <title>triage-tool</title>
+    <style>
+      :root {
+        --keep: #2e7d32;
+        --trash: #c62828;
+        --skip: #555;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        background: #000;
+        color: #eee;
+        font-family: system-ui, sans-serif;
+        overflow: hidden;
+      }
+      #stage {
+        position: fixed;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        touch-action: none; /* we handle swipes ourselves */
+      }
+      #img {
+        max-width: 100%;
+        max-height: 100%;
+        object-fit: contain;
+        user-select: none;
+        -webkit-user-drag: none;
+      }
+      /* Top status bar */
+      #bar {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        padding: 6px 10px;
+        display: flex;
+        gap: 12px;
+        align-items: center;
+        font-size: 13px;
+        background: linear-gradient(rgba(0, 0, 0, 0.6), rgba(0, 0, 0, 0));
+        pointer-events: none;
+      }
+      #relpath {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        flex: 1;
+        opacity: 0.85;
+      }
+      #count {
+        opacity: 0.7;
+        font-variant-numeric: tabular-nums;
+      }
+      #hints {
+        opacity: 0.5;
+        font-size: 11px;
+      }
+      /* Centered messages (loading / done) */
+      #message {
+        position: fixed;
+        inset: 0;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        font-size: 18px;
+        opacity: 0.7;
+        pointer-events: none;
+        text-align: center;
+        padding: 20px;
+      }
+      /* Transient toast (e.g. undo failed) */
+      #toast {
+        position: fixed;
+        bottom: 24px;
+        left: 50%;
+        transform: translateX(-50%);
+        background: rgba(20, 20, 20, 0.95);
+        border: 1px solid #444;
+        padding: 10px 16px;
+        border-radius: 8px;
+        font-size: 14px;
+        opacity: 0;
+        transition: opacity 0.2s;
+        pointer-events: none;
+        max-width: 90vw;
+      }
+      #toast.show {
+        opacity: 1;
+      }
+      /* Metadata panel */
+      #meta {
+        position: fixed;
+        top: 0;
+        right: 0;
+        bottom: 0;
+        width: min(480px, 90vw);
+        background: rgba(10, 10, 10, 0.94);
+        border-left: 1px solid #333;
+        padding: 40px 16px 16px;
+        overflow: auto;
+        display: none;
+        font-size: 13px;
+      }
+      #meta.show {
+        display: block;
+      }
+      #meta h3 {
+        margin: 12px 0 4px;
+        font-size: 13px;
+        opacity: 0.7;
+      }
+      #meta .pos {
+        color: #9ccc65;
+      }
+      #meta .neg {
+        color: #ef9a9a;
+      }
+      #meta pre {
+        white-space: pre-wrap;
+        word-break: break-word;
+        background: #161616;
+        padding: 8px;
+        border-radius: 6px;
+        font-size: 11px;
+        line-height: 1.4;
+      }
+      .promptblock {
+        border: 1px solid #2a2a2a;
+        border-radius: 6px;
+        padding: 6px 8px;
+        margin-bottom: 8px;
+      }
+      .promptblock .label {
+        opacity: 0.5;
+        font-size: 11px;
+      }
+    </style>
   </head>
   <body>
-    <!-- The real single-page app is implemented in task T7 and embedded here
-         via include_str!. This placeholder keeps the GET / route valid. -->
-    <p>triage-tool is running. UI not yet implemented.</p>
+    <div id="stage">
+      <img id="img" alt="" />
+    </div>
+    <div id="bar">
+      <span id="count">…</span>
+      <span id="relpath"></span>
+      <span id="hints">→ keep · ← trash · ↓ skip · ⌫ undo · i meta</span>
+    </div>
+    <div id="message">読み込み中…</div>
+    <div id="meta"></div>
+    <div id="toast"></div>
+
+    <script>
+      "use strict";
+
+      // Number of images to keep queued ahead (current + prefetch lookahead).
+      const TARGET = 3;
+
+      const els = {
+        img: document.getElementById("img"),
+        relpath: document.getElementById("relpath"),
+        count: document.getElementById("count"),
+        message: document.getElementById("message"),
+        meta: document.getElementById("meta"),
+        toast: document.getElementById("toast"),
+      };
+
+      // Upcoming relative paths; queue[0] is the image currently shown.
+      let queue = [];
+      // Once true, the backlog on this side is drained (no more `next`).
+      let exhausted = false;
+      // `after` continuation point used when the queue has fully emptied.
+      let tailAfter = null;
+      // Local backlog estimate; seeded from /api/count then adjusted locally so
+      // we do not re-walk the tree on every action (design.md §1, §10).
+      let backlog = null;
+      // Guards against overlapping actions while a request is in flight.
+      let busy = false;
+      let metaOpen = false;
+      let toastTimer = null;
+
+      // Build an image/meta URL, percent-encoding each path segment but keeping
+      // the '/' separators that identify subfolders.
+      function encodeRel(rel) {
+        return rel.split("/").map(encodeURIComponent).join("/");
+      }
+      const imageUrl = (rel) => "/api/image/" + encodeRel(rel);
+      const metaUrl = (rel) => "/api/meta/" + encodeRel(rel);
+
+      async function fetchNext(after) {
+        const url = after == null ? "/api/next" : "/api/next?after=" + encodeURIComponent(after);
+        const res = await fetch(url);
+        if (res.status === 204) return null; // queue drained
+        if (!res.ok) throw new Error("next failed: " + res.status);
+        const data = await res.json();
+        return data.relpath;
+      }
+
+      // Keep the queue topped up to TARGET by chaining `next` from its tail.
+      async function refill() {
+        while (!exhausted && queue.length < TARGET) {
+          const after = queue.length > 0 ? queue[queue.length - 1] : tailAfter;
+          let rel;
+          try {
+            rel = await fetchNext(after);
+          } catch (e) {
+            break; // transient; will retry on the next action
+          }
+          if (rel == null) {
+            exhausted = true;
+            break;
+          }
+          queue.push(rel);
+        }
+      }
+
+      // Warm the browser cache for the lookahead images (design.md §8).
+      function prefetch() {
+        for (let i = 1; i < queue.length; i++) {
+          const pre = new Image();
+          pre.src = imageUrl(queue[i]);
+        }
+      }
+
+      function updateCount() {
+        els.count.textContent = backlog == null ? "" : "~" + Math.max(0, backlog) + " 残";
+      }
+
+      function showMessage(text) {
+        if (text) {
+          els.message.textContent = text;
+          els.message.style.display = "flex";
+        } else {
+          els.message.style.display = "none";
+        }
+      }
+
+      function toast(text) {
+        els.toast.textContent = text;
+        els.toast.classList.add("show");
+        if (toastTimer) clearTimeout(toastTimer);
+        toastTimer = setTimeout(() => els.toast.classList.remove("show"), 1800);
+      }
+
+      // Render queue[0]. If nothing is queued, show a terminal/loading message.
+      function render() {
+        if (queue.length === 0) {
+          els.img.removeAttribute("src");
+          els.relpath.textContent = "";
+          showMessage(exhausted ? "すべて選別済み 🎉" : "読み込み中…");
+          if (metaOpen) renderMeta(null);
+          return;
+        }
+        showMessage(null);
+        const rel = queue[0];
+        els.img.src = imageUrl(rel);
+        els.relpath.textContent = rel;
+        if (metaOpen) loadMeta(rel);
+      }
+
+      // Advance to the next image. `moved` indicates the current file left the
+      // source tree (keep/trash) so the local backlog estimate drops.
+      async function advance(moved) {
+        const shifted = queue.shift();
+        tailAfter = shifted; // continuation point if the queue drains
+        if (moved && backlog != null) backlog--;
+        updateCount();
+        render();
+        await refill();
+        prefetch();
+        render(); // in case the queue was empty and refill produced an image
+      }
+
+      async function decide(action) {
+        if (busy || queue.length === 0) return;
+        const rel = queue[0];
+        busy = true;
+        try {
+          const res = await fetch("/api/" + action, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ relpath: rel }),
+          });
+          if (!res.ok) {
+            toast(action + " に失敗しました (" + res.status + ")");
+            return;
+          }
+          await advance(true);
+        } catch (e) {
+          toast(action + " に失敗しました");
+        } finally {
+          busy = false;
+        }
+      }
+
+      // skip is a pure client move: no server state changes, we just step over
+      // the current image (design.md §11). It reappears only after a refresh.
+      async function skip() {
+        if (busy || queue.length === 0) return;
+        busy = true;
+        try {
+          await advance(false);
+        } finally {
+          busy = false;
+        }
+      }
+
+      async function undo() {
+        if (busy) return;
+        busy = true;
+        try {
+          const res = await fetch("/api/undo", { method: "POST" });
+          if (res.status === 409) {
+            toast("もう戻せません");
+            return;
+          }
+          if (!res.ok) {
+            toast("undo に失敗しました (" + res.status + ")");
+            return;
+          }
+          const data = await res.json();
+          // The restored file is shown immediately (re-enters the queue front).
+          queue.unshift(data.relpath);
+          exhausted = false;
+          if (backlog != null) backlog++;
+          updateCount();
+          render();
+          prefetch();
+        } catch (e) {
+          toast("undo に失敗しました");
+        } finally {
+          busy = false;
+        }
+      }
+
+      // ---- metadata panel ----
+      function renderMeta(meta) {
+        if (meta == null) {
+          els.meta.innerHTML = "<p style='opacity:.5'>メタデータなし</p>";
+          return;
+        }
+        let html = "";
+        if (meta.prompts && meta.prompts.length) {
+          for (const p of meta.prompts) {
+            html += "<div class='promptblock'>";
+            html += "<div class='label'>sampler " + escapeHtml(p.sampler_node) + "</div>";
+            if (p.positive != null) {
+              html += "<div class='pos'>+ " + escapeHtml(p.positive) + "</div>";
+            }
+            if (p.negative != null) {
+              html += "<div class='neg'>− " + escapeHtml(p.negative) + "</div>";
+            }
+            html += "</div>";
+          }
+        }
+        if (meta.raw != null) {
+          html += "<h3>raw</h3><pre>" + escapeHtml(meta.raw) + "</pre>";
+        }
+        if (!html) html = "<p style='opacity:.5'>メタデータなし</p>";
+        els.meta.innerHTML = html;
+      }
+
+      function escapeHtml(s) {
+        return String(s)
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;");
+      }
+
+      async function loadMeta(rel) {
+        els.meta.innerHTML = "<p style='opacity:.5'>読み込み中…</p>";
+        try {
+          const res = await fetch(metaUrl(rel));
+          if (!res.ok) {
+            renderMeta(null);
+            return;
+          }
+          renderMeta(await res.json());
+        } catch (e) {
+          renderMeta(null);
+        }
+      }
+
+      function toggleMeta() {
+        metaOpen = !metaOpen;
+        els.meta.classList.toggle("show", metaOpen);
+        if (metaOpen && queue.length) loadMeta(queue[0]);
+      }
+
+      // A vanished image (write-in-progress race or external delete) is treated
+      // as a skip: the next refresh re-surfaces it if it was just being written
+      // (design.md §7).
+      els.img.addEventListener("error", () => {
+        if (queue.length && els.img.getAttribute("src")) skip();
+      });
+
+      // ---- keyboard ----
+      window.addEventListener("keydown", (e) => {
+        switch (e.key) {
+          case "ArrowRight":
+            decide("keep");
+            break;
+          case "ArrowLeft":
+            decide("trash");
+            break;
+          case "ArrowDown":
+            skip();
+            break;
+          case "Backspace":
+            e.preventDefault(); // do not navigate back
+            undo();
+            break;
+          case "i":
+          case "I":
+            toggleMeta();
+            break;
+        }
+      });
+
+      // ---- touch / swipe ----
+      let touchStart = null;
+      const SWIPE_MIN = 40; // px threshold to count as a swipe
+
+      els.img.parentElement.addEventListener(
+        "touchstart",
+        (e) => {
+          const t = e.changedTouches[0];
+          touchStart = { x: t.clientX, y: t.clientY };
+        },
+        { passive: true }
+      );
+
+      els.img.parentElement.addEventListener(
+        "touchend",
+        (e) => {
+          if (!touchStart) return;
+          const t = e.changedTouches[0];
+          const dx = t.clientX - touchStart.x;
+          const dy = t.clientY - touchStart.y;
+          touchStart = null;
+          if (Math.abs(dx) < SWIPE_MIN && Math.abs(dy) < SWIPE_MIN) {
+            toggleMeta(); // tap
+            return;
+          }
+          if (Math.abs(dx) > Math.abs(dy)) {
+            if (dx > 0) decide("keep"); // right
+            else decide("trash"); // left
+          } else {
+            if (dy > 0) skip(); // down
+            else undo(); // up
+          }
+        },
+        { passive: true }
+      );
+
+      // ---- boot ----
+      async function init() {
+        try {
+          const res = await fetch("/api/count");
+          if (res.ok) backlog = (await res.json()).count;
+        } catch (e) {
+          /* backlog estimate is optional */
+        }
+        updateCount();
+        await refill();
+        render();
+        prefetch();
+      }
+
+      init();
+    </script>
   </body>
 </html>
