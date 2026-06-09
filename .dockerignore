@@ -1,0 +1,10 @@
+# Keep the build context small and reproducible.
+/target/
+/.tmp/
+/.git/
+**/*.rs.bk
+.env
+.env.*
+.dockerignore
+Dockerfile
+README.md
