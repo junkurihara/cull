@@ -7,8 +7,34 @@
 //! sorted-free single pass over the source tree, so work scales with the
 //! unprocessed backlog rather than total generations.
 
+mod config;
+
+use config::{Config, RawConfig};
+
 fn main() {
-    // Real wiring (config load, router, listener) is added in later tasks.
-    // This skeleton exists so the crate builds from the first commit.
-    println!("triage-tool: not yet wired up");
+    let cfg = match load_config() {
+        Ok(cfg) => cfg,
+        Err(msg) => {
+            eprintln!("triage-tool: configuration error: {msg}");
+            std::process::exit(1);
+        }
+    };
+
+    // HTTP wiring (router, listener) is added in later tasks. For now report
+    // the resolved configuration so the startup path is exercised end to end.
+    println!(
+        "triage-tool: source={} keep={} trash={} order={:?} exts={:?} undo_depth={} bind={}",
+        cfg.source_dir.display(),
+        cfg.keep_dir.display(),
+        cfg.trash_dir.display(),
+        cfg.order,
+        cfg.extensions,
+        cfg.undo_depth,
+        cfg.bind_addr,
+    );
+}
+
+fn load_config() -> Result<Config, String> {
+    let raw = RawConfig::from_env().map_err(|e| e.to_string())?;
+    raw.resolve().map_err(|e| e.to_string())
 }
