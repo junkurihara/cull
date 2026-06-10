@@ -72,7 +72,15 @@ async fn next(
 ) -> Result<Response, ApiError> {
     let cfg = st.cfg.clone();
     let found = run_blocking(move || {
-        walk::find_next(&cfg, params.after.as_deref()).map_err(ApiError::from)
+        // Time the walk: each `next` is a full O(n) pass, so this is the number
+        // to watch when the backlog is large (design.md §1, §2).
+        let started = std::time::Instant::now();
+        let result = walk::find_next(&cfg, params.after.as_deref());
+        tracing::info!(
+            elapsed_ms = started.elapsed().as_millis() as u64,
+            "find_next walk"
+        );
+        result.map_err(ApiError::from)
     })
     .await?;
     match found {
@@ -89,7 +97,16 @@ struct CountResponse {
 
 async fn count(State(st): State<Arc<AppState>>) -> Result<Json<CountResponse>, ApiError> {
     let cfg = st.cfg.clone();
-    let count = run_blocking(move || walk::count_backlog(&cfg).map_err(ApiError::from)).await?;
+    let count = run_blocking(move || {
+        let started = std::time::Instant::now();
+        let result = walk::count_backlog(&cfg);
+        tracing::info!(
+            elapsed_ms = started.elapsed().as_millis() as u64,
+            "count_backlog walk"
+        );
+        result.map_err(ApiError::from)
+    })
+    .await?;
     Ok(Json(CountResponse { count }))
 }
 

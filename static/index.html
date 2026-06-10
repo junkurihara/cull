@@ -305,17 +305,30 @@
       let busy = false;
       let metaOpen = false;
       let toastTimer = null;
+      // Set when fetching the first image failed (so we can offer a retry
+      // instead of sitting on a "loading" message forever).
+      let loadError = false;
+
+      // The app may be served under a reverse-proxy subpath (e.g. /cull/) that
+      // the container itself is unaware of. Build every request relative to the
+      // directory this page was loaded from, so the prefix is preserved. Works
+      // identically at the root ("/") and under any subpath.
+      const PREFIX = location.pathname.endsWith("/")
+        ? location.pathname
+        : location.pathname + "/";
+      const api = (p) => PREFIX + p;
 
       // Build an image/meta URL, percent-encoding each path segment but keeping
       // the '/' separators that identify subfolders.
       function encodeRel(rel) {
         return rel.split("/").map(encodeURIComponent).join("/");
       }
-      const imageUrl = (rel) => "/api/image/" + encodeRel(rel);
-      const metaUrl = (rel) => "/api/meta/" + encodeRel(rel);
+      const imageUrl = (rel) => api("api/image/" + encodeRel(rel));
+      const metaUrl = (rel) => api("api/meta/" + encodeRel(rel));
 
       async function fetchNext(after) {
-        const url = after == null ? "/api/next" : "/api/next?after=" + encodeURIComponent(after);
+        const url =
+          after == null ? api("api/next") : api("api/next?after=" + encodeURIComponent(after));
         const res = await fetch(url);
         if (res.status === 204) return null; // queue drained
         if (!res.ok) throw new Error("next failed: " + res.status);
@@ -324,6 +337,10 @@
       }
 
       // Keep the queue topped up to TARGET by chaining `next` from its tail.
+      // The first image is painted as soon as it arrives so a large cold-start
+      // scan does not block the screen on the lookahead (design.md §8): each
+      // `next` is a full O(n) walk, and on the very first deploy n is the whole
+      // backlog.
       async function refill() {
         while (!exhausted && queue.length < TARGET) {
           const after = queue.length > 0 ? queue[queue.length - 1] : tailAfter;
@@ -331,13 +348,21 @@
           try {
             rel = await fetchNext(after);
           } catch (e) {
-            break; // transient; will retry on the next action
+            // Surface a first-image failure instead of an endless "loading".
+            if (queue.length === 0) {
+              loadError = true;
+              render();
+            }
+            break;
           }
           if (rel == null) {
             exhausted = true;
+            if (queue.length === 0) render();
             break;
           }
+          const wasEmpty = queue.length === 0;
           queue.push(rel);
+          if (wasEmpty) render(); // paint the first image immediately
         }
       }
 
@@ -353,12 +378,15 @@
         els.count.textContent = backlog == null ? "" : "~" + Math.max(0, backlog) + " 残";
       }
 
-      function showMessage(text) {
+      function showMessage(text, clickable) {
         if (text) {
           els.message.textContent = text;
           els.message.style.display = "flex";
+          els.message.style.pointerEvents = clickable ? "auto" : "none";
+          els.message.style.cursor = clickable ? "pointer" : "default";
         } else {
           els.message.style.display = "none";
+          els.message.style.pointerEvents = "none";
         }
       }
 
@@ -369,12 +397,19 @@
         toastTimer = setTimeout(() => els.toast.classList.remove("show"), 1800);
       }
 
-      // Render queue[0]. If nothing is queued, show a terminal/loading message.
+      // Render queue[0]. If nothing is queued, show a terminal/loading/error
+      // message. The error state is tappable to retry.
       function render() {
         if (queue.length === 0) {
           els.img.removeAttribute("src");
           els.relpath.textContent = "";
-          showMessage(exhausted ? "すべて選別済み 🎉" : "読み込み中…");
+          if (loadError) {
+            showMessage("読み込みに失敗しました。タップ / クリックで再試行", true);
+          } else if (exhausted) {
+            showMessage("すべて選別済み 🎉");
+          } else {
+            showMessage("画像をスキャン中… 大量の場合は初回に時間がかかります");
+          }
           if (metaOpen) renderMeta(null);
           return;
         }
@@ -403,7 +438,7 @@
         const rel = queue[0];
         busy = true;
         try {
-          const res = await fetch("/api/" + action, {
+          const res = await fetch(api("api/" + action), {
             method: "POST",
             headers: { "content-type": "application/json" },
             body: JSON.stringify({ relpath: rel }),
@@ -438,7 +473,7 @@
         if (busy) return;
         busy = true;
         try {
-          const res = await fetch("/api/undo", { method: "POST" });
+          const res = await fetch(api("api/undo"), { method: "POST" });
           if (res.status === 409) {
             toast("もう戻せません");
             return;
@@ -584,17 +619,41 @@
       );
 
       // ---- boot ----
-      async function init() {
-        try {
-          const res = await fetch("/api/count");
-          if (res.ok) backlog = (await res.json()).count;
-        } catch (e) {
-          /* backlog estimate is optional */
-        }
-        updateCount();
+      // Get the first image showing as fast as possible. `refill` paints the
+      // first item the moment it arrives, so the screen is gated on a single
+      // `next` walk, not on the backlog count plus the full lookahead.
+      async function bootstrap() {
+        loadError = false;
+        if (queue.length === 0) render(); // immediate "scanning" feedback
         await refill();
-        render();
         prefetch();
+      }
+
+      // The backlog count is a full O(n) walk; fetch it off the critical path
+      // so a large library never blocks the first paint (design.md §1, §10).
+      function fetchCountInBackground() {
+        fetch(api("api/count"))
+          .then((r) => (r.ok ? r.json() : null))
+          .then((d) => {
+            if (d) {
+              backlog = d.count;
+              updateCount();
+            }
+          })
+          .catch(() => {});
+      }
+
+      // Tap/click the centered message to retry after a load failure.
+      async function retry() {
+        if (busy || queue.length > 0) return;
+        await bootstrap();
+      }
+      els.message.addEventListener("click", retry);
+
+      async function init() {
+        render(); // show the scanning message right away, before any await
+        fetchCountInBackground();
+        await bootstrap();
       }
 
       init();
