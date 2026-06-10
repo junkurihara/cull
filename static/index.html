@@ -40,27 +40,11 @@
         transition: transform 0.17s ease-out, opacity 0.17s ease-out;
         will-change: transform, opacity;
       }
-      /* Directional slide-out of the current image when an action fires. */
-      #img.out-right {
-        transform: translateX(70%);
-        opacity: 0;
-      }
-      #img.out-left {
-        transform: translateX(-70%);
-        opacity: 0;
-      }
-      #img.out-down {
-        transform: translateY(70%);
-        opacity: 0;
-      }
+      /* All motion is applied via inline styles from JS (single source of truth,
+         no class-vs-inline specificity fights during rapid actions). */
       @media (prefers-reduced-motion: reduce) {
         #img {
           transition: opacity 0.12s ease-out;
-        }
-        #img.out-right,
-        #img.out-left,
-        #img.out-down {
-          transform: none;
         }
       }
       /* Top status bar */
@@ -426,21 +410,38 @@
       // which matters most on touch where there is no cursor cue.
       const wait = (ms) => new Promise((r) => setTimeout(r, ms));
       const ANIM_MS = 170;
-      const OUT_CLASS = { right: "out-right", left: "out-left", down: "out-down" };
       const REDUCE = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      const OUT_TRANSFORM = {
+        right: "translateX(70%)",
+        left: "translateX(-70%)",
+        down: "translateY(70%)",
+      };
+      // Bumped on every motion start; a pending `onload` reveal from a previous
+      // action checks this and bails if a newer action has superseded it. This
+      // is what keeps rapid swiping from stacking half-finished animations
+      // (which read as a "bounce").
+      let animGen = 0;
+
+      function settle() {
+        els.img.style.transition = "";
+        els.img.style.transform = "";
+        els.img.style.opacity = "";
+      }
 
       // Slide the current image out toward `dir` (right=keep, left=trash, down=skip).
       function animateOut(dir) {
-        els.img.classList.add(OUT_CLASS[dir]);
+        animGen++;
+        els.img.onload = null;
+        els.img.style.transition = "";
+        els.img.style.transform = REDUCE ? "" : OUT_TRANSFORM[dir];
+        els.img.style.opacity = "0";
       }
 
       // Snap the image back to centre (used when an action failed).
       function clearMotion() {
-        els.img.classList.remove("out-right", "out-left", "out-down");
+        animGen++;
         els.img.onload = null;
-        els.img.style.transition = "";
-        els.img.style.transform = "";
-        els.img.style.opacity = "";
+        settle();
       }
 
       // Swap to `rel`. When `animateIn` is set, the new image enters from the
@@ -448,13 +449,11 @@
       // it has loaded — revealing earlier would briefly show the PREVIOUS image
       // at centre, which is what read as a "bounce".
       function showImage(rel, animateIn) {
-        els.img.classList.remove("out-right", "out-left", "out-down");
+        const gen = ++animGen;
+        els.img.onload = null;
         const url = imageUrl(rel);
         if (!animateIn) {
-          els.img.onload = null;
-          els.img.style.transition = "";
-          els.img.style.transform = "";
-          els.img.style.opacity = "";
+          settle();
           els.img.src = url;
           return;
         }
@@ -462,15 +461,12 @@
         els.img.style.transition = "none";
         els.img.style.transform = REDUCE ? "" : "translateY(-60%)";
         els.img.style.opacity = "0";
-        let revealed = false;
         const reveal = () => {
-          if (revealed) return;
-          revealed = true;
+          if (gen !== animGen) return; // a newer action superseded this one
           els.img.onload = null;
           requestAnimationFrame(() => {
-            els.img.style.transition = "";
-            els.img.style.transform = "";
-            els.img.style.opacity = "";
+            if (gen !== animGen) return;
+            settle();
           });
         };
         els.img.onload = reveal;
