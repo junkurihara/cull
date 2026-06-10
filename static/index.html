@@ -26,10 +26,19 @@
       #stage {
         position: fixed;
         inset: 0;
+        overflow: hidden; /* clip the zoomed/panned image at the screen edges */
+        touch-action: none; /* we handle swipes/pinch ourselves */
+      }
+      /* Two layers so they never fight over `transform`:
+         #frame carries the per-action slide/fade; #img carries zoom/pan. */
+      #frame {
+        position: absolute;
+        inset: 0;
         display: flex;
         align-items: center;
         justify-content: center;
-        touch-action: none; /* we handle swipes ourselves */
+        transition: transform 0.17s ease-out, opacity 0.17s ease-out;
+        will-change: transform, opacity;
       }
       #img {
         max-width: 100%;
@@ -37,13 +46,11 @@
         object-fit: contain;
         user-select: none;
         -webkit-user-drag: none;
-        transition: transform 0.17s ease-out, opacity 0.17s ease-out;
-        will-change: transform, opacity;
+        will-change: transform;
       }
-      /* All motion is applied via inline styles from JS (single source of truth,
-         no class-vs-inline specificity fights during rapid actions). */
+      /* Per-action motion is applied via inline styles on #frame from JS. */
       @media (prefers-reduced-motion: reduce) {
-        #img {
+        #frame {
           transition: opacity 0.12s ease-out;
         }
       }
@@ -256,7 +263,7 @@
   </head>
   <body>
     <div id="stage">
-      <img id="img" alt="" />
+      <div id="frame"><img id="img" alt="" /></div>
     </div>
     <div id="bar">
       <span id="count">…</span>
@@ -277,6 +284,8 @@
 
       const els = {
         img: document.getElementById("img"),
+        stage: document.getElementById("stage"),
+        frame: document.getElementById("frame"),
         relpath: document.getElementById("relpath"),
         count: document.getElementById("count"),
         message: document.getElementById("message"),
@@ -422,19 +431,21 @@
       // (which read as a "bounce").
       let animGen = 0;
 
+      // Per-action motion lives on #frame so it never collides with the zoom
+      // transform on #img.
       function settle() {
-        els.img.style.transition = "";
-        els.img.style.transform = "";
-        els.img.style.opacity = "";
+        els.frame.style.transition = "";
+        els.frame.style.transform = "";
+        els.frame.style.opacity = "";
       }
 
       // Slide the current image out toward `dir` (right=keep, left=trash, down=skip).
       function animateOut(dir) {
         animGen++;
         els.img.onload = null;
-        els.img.style.transition = "";
-        els.img.style.transform = REDUCE ? "" : OUT_TRANSFORM[dir];
-        els.img.style.opacity = "0";
+        els.frame.style.transition = "";
+        els.frame.style.transform = REDUCE ? "" : OUT_TRANSFORM[dir];
+        els.frame.style.opacity = "0";
       }
 
       // Snap the image back to centre (used when an action failed).
@@ -451,16 +462,18 @@
       function showImage(rel, animateIn) {
         const gen = ++animGen;
         els.img.onload = null;
+        resetZoom(); // every new image starts at 1x
         const url = imageUrl(rel);
         if (!animateIn) {
           settle();
           els.img.src = url;
           return;
         }
-        // Park above the viewport, invisible, then glide down once loaded.
-        els.img.style.transition = "none";
-        els.img.style.transform = REDUCE ? "" : "translateY(-60%)";
-        els.img.style.opacity = "0";
+        // Park the frame above the viewport, invisible, then glide it down once
+        // the new image has loaded.
+        els.frame.style.transition = "none";
+        els.frame.style.transform = REDUCE ? "" : "translateY(-60%)";
+        els.frame.style.opacity = "0";
         const reveal = () => {
           if (gen !== animGen) return; // a newer action superseded this one
           els.img.onload = null;
@@ -518,6 +531,7 @@
         if (busy || queue.length === 0) return;
         const rel = queue[0];
         busy = true;
+        resetZoom(); // act on the centred image, never mid-zoom
         const dir = action === "keep" ? "right" : "left";
         flash(action);
         animateOut(dir); // the current image slides away immediately
@@ -548,6 +562,7 @@
       async function skip() {
         if (busy || queue.length === 0) return;
         busy = true;
+        resetZoom();
         try {
           flash("skip");
           animateOut("down");
@@ -669,44 +684,198 @@
           case "I":
             toggleMeta();
             break;
+          case "+":
+          case "=":
+            zoomAt(innerWidth / 2, innerHeight / 2, scale * 1.3);
+            break;
+          case "-":
+            zoomAt(innerWidth / 2, innerHeight / 2, scale / 1.3);
+            break;
+          case "0":
+          case "Escape":
+            resetZoom();
+            break;
         }
       });
 
-      // ---- touch / swipe ----
-      let touchStart = null;
-      const SWIPE_MIN = 40; // px threshold to count as a swipe
+      // ---- zoom + pan ----
+      // Zoom (on #img) is independent of the per-action slide (on #frame).
+      let scale = 1;
+      let tx = 0;
+      let ty = 0;
+      const MAX_SCALE = 5;
+      const isZoomed = () => scale > 1.01;
 
-      els.img.parentElement.addEventListener(
+      function applyZoom() {
+        els.img.style.transform = isZoomed()
+          ? `translate(${tx}px, ${ty}px) scale(${scale})`
+          : "";
+        els.stage.style.cursor = isZoomed() ? "grab" : "";
+      }
+
+      function resetZoom() {
+        scale = 1;
+        tx = 0;
+        ty = 0;
+        els.img.style.transform = "";
+        els.stage.style.cursor = "";
+      }
+
+      // Keep the (scaled) image from being dragged entirely off-screen.
+      function clampPan() {
+        const maxX = ((scale - 1) * els.img.clientWidth) / 2;
+        const maxY = ((scale - 1) * els.img.clientHeight) / 2;
+        tx = Math.max(-maxX, Math.min(maxX, tx));
+        ty = Math.max(-maxY, Math.min(maxY, ty));
+      }
+
+      // Zoom toward a screen point so it stays under the cursor / pinch centre.
+      function zoomAt(cx, cy, target) {
+        const next = Math.max(1, Math.min(MAX_SCALE, target));
+        const rect = els.img.getBoundingClientRect();
+        const ox = cx - (rect.left + rect.width / 2);
+        const oy = cy - (rect.top + rect.height / 2);
+        const ratio = next / scale;
+        tx -= ox * (ratio - 1);
+        ty -= oy * (ratio - 1);
+        scale = next;
+        if (!isZoomed()) {
+          resetZoom();
+          return;
+        }
+        clampPan();
+        applyZoom();
+      }
+
+      // ---- pointer gestures (touch + mouse + wheel) ----
+      const SWIPE_MIN = 40; // px threshold to count as a swipe
+      let touchStart = null; // single-finger swipe candidate (at 1x)
+      let pinch = null; // { startDist, startScale }
+      let panLast = null; // last touch point while panning a zoomed image
+      let panStart = null; // where a zoomed gesture began (to detect a tap)
+      let mouseLast = null; // last mouse point while dragging a zoomed image
+
+      const dist2 = (a, b) => Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+      const mid2 = (a, b) => ({ x: (a.clientX + b.clientX) / 2, y: (a.clientY + b.clientY) / 2 });
+
+      els.stage.addEventListener(
         "touchstart",
         (e) => {
-          const t = e.changedTouches[0];
-          touchStart = { x: t.clientX, y: t.clientY };
+          if (e.touches.length === 2) {
+            pinch = { startDist: dist2(e.touches[0], e.touches[1]), startScale: scale };
+            touchStart = null;
+            panLast = null;
+          } else if (e.touches.length === 1) {
+            const t = e.touches[0];
+            if (isZoomed()) {
+              panLast = { x: t.clientX, y: t.clientY };
+              panStart = { x: t.clientX, y: t.clientY };
+            } else {
+              touchStart = { x: t.clientX, y: t.clientY };
+            }
+          }
         },
-        { passive: true }
+        { passive: false }
       );
 
-      els.img.parentElement.addEventListener(
+      els.stage.addEventListener(
+        "touchmove",
+        (e) => {
+          if (pinch && e.touches.length === 2) {
+            e.preventDefault();
+            const d = dist2(e.touches[0], e.touches[1]);
+            const m = mid2(e.touches[0], e.touches[1]);
+            zoomAt(m.x, m.y, pinch.startScale * (d / pinch.startDist));
+          } else if (panLast && e.touches.length === 1 && isZoomed()) {
+            e.preventDefault();
+            const t = e.touches[0];
+            tx += t.clientX - panLast.x;
+            ty += t.clientY - panLast.y;
+            panLast = { x: t.clientX, y: t.clientY };
+            clampPan();
+            applyZoom();
+          }
+        },
+        { passive: false }
+      );
+
+      els.stage.addEventListener(
         "touchend",
         (e) => {
+          // End of a pinch.
+          if (pinch && e.touches.length < 2) {
+            pinch = null;
+            if (scale <= 1.05) resetZoom();
+            if (e.touches.length === 1 && isZoomed()) {
+              const t = e.touches[0];
+              panLast = { x: t.clientX, y: t.clientY };
+              panStart = { x: t.clientX, y: t.clientY };
+            }
+            return;
+          }
+          // End of a pan (zoomed). A near-zero move = tap to reset zoom.
+          if (panLast) {
+            const t = e.changedTouches[0];
+            const moved = panStart
+              ? Math.hypot(t.clientX - panStart.x, t.clientY - panStart.y)
+              : 99;
+            panLast = null;
+            panStart = null;
+            if (moved < SWIPE_MIN) resetZoom();
+            return;
+          }
+          // Single-finger gesture at 1x: tap (meta) or swipe (action).
           if (!touchStart) return;
           const t = e.changedTouches[0];
           const dx = t.clientX - touchStart.x;
           const dy = t.clientY - touchStart.y;
           touchStart = null;
           if (Math.abs(dx) < SWIPE_MIN && Math.abs(dy) < SWIPE_MIN) {
-            toggleMeta(); // tap
+            toggleMeta();
             return;
           }
           if (Math.abs(dx) > Math.abs(dy)) {
-            if (dx > 0) decide("keep"); // right
-            else decide("trash"); // left
+            if (dx > 0) decide("keep");
+            else decide("trash");
           } else {
-            if (dy > 0) skip(); // down
-            else undo(); // up
+            if (dy > 0) skip();
+            else undo();
           }
         },
-        { passive: true }
+        { passive: false }
       );
+
+      // Desktop: wheel zooms toward the cursor; drag pans while zoomed.
+      els.stage.addEventListener(
+        "wheel",
+        (e) => {
+          e.preventDefault();
+          const factor = e.deltaY < 0 ? 1.15 : 1 / 1.15;
+          zoomAt(e.clientX, e.clientY, scale * factor);
+        },
+        { passive: false }
+      );
+
+      els.stage.addEventListener("mousedown", (e) => {
+        if (!isZoomed()) return;
+        mouseLast = { x: e.clientX, y: e.clientY };
+        els.stage.style.cursor = "grabbing";
+        e.preventDefault();
+      });
+      window.addEventListener("mousemove", (e) => {
+        if (!mouseLast || !isZoomed()) return;
+        tx += e.clientX - mouseLast.x;
+        ty += e.clientY - mouseLast.y;
+        mouseLast = { x: e.clientX, y: e.clientY };
+        clampPan();
+        applyZoom();
+      });
+      window.addEventListener("mouseup", () => {
+        if (mouseLast) {
+          mouseLast = null;
+          els.stage.style.cursor = isZoomed() ? "grab" : "";
+        }
+      });
 
       // ---- boot ----
       // Get the first image showing as fast as possible. `refill` paints the
