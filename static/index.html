@@ -427,6 +427,7 @@
       const wait = (ms) => new Promise((r) => setTimeout(r, ms));
       const ANIM_MS = 170;
       const OUT_CLASS = { right: "out-right", left: "out-left", down: "out-down" };
+      const REDUCE = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
       // Slide the current image out toward `dir` (right=keep, left=trash, down=skip).
       function animateOut(dir) {
@@ -436,33 +437,46 @@
       // Snap the image back to centre (used when an action failed).
       function clearMotion() {
         els.img.classList.remove("out-right", "out-left", "out-down");
+        els.img.onload = null;
         els.img.style.transition = "";
         els.img.style.transform = "";
         els.img.style.opacity = "";
       }
 
-      // Swap to `rel`. When `animateIn` is set, the new image fades up at
-      // centre with a slight scale. We deliberately do NOT slide it in from the
-      // opposite edge: that counter-motion reads as the image bouncing back.
+      // Swap to `rel`. When `animateIn` is set, the new image enters from the
+      // top (consistent with the downward skip flow) and is only revealed once
+      // it has loaded — revealing earlier would briefly show the PREVIOUS image
+      // at centre, which is what read as a "bounce".
       function showImage(rel, animateIn) {
         els.img.classList.remove("out-right", "out-left", "out-down");
-        if (animateIn) {
-          els.img.style.transition = "none";
-          els.img.style.transform = "scale(0.97)";
-          els.img.style.opacity = "0";
-          els.img.src = imageUrl(rel);
-          // Next frame: re-enable the transition and settle to centre.
+        const url = imageUrl(rel);
+        if (!animateIn) {
+          els.img.onload = null;
+          els.img.style.transition = "";
+          els.img.style.transform = "";
+          els.img.style.opacity = "";
+          els.img.src = url;
+          return;
+        }
+        // Park above the viewport, invisible, then glide down once loaded.
+        els.img.style.transition = "none";
+        els.img.style.transform = REDUCE ? "" : "translateY(-60%)";
+        els.img.style.opacity = "0";
+        let revealed = false;
+        const reveal = () => {
+          if (revealed) return;
+          revealed = true;
+          els.img.onload = null;
           requestAnimationFrame(() => {
             els.img.style.transition = "";
             els.img.style.transform = "";
             els.img.style.opacity = "";
           });
-        } else {
-          els.img.style.transition = "";
-          els.img.style.transform = "";
-          els.img.style.opacity = "";
-          els.img.src = imageUrl(rel);
-        }
+        };
+        els.img.onload = reveal;
+        els.img.src = url;
+        // Already cached/decoded: reveal right away.
+        if (els.img.complete && els.img.naturalWidth > 0) reveal();
       }
 
       // Render queue[0]. If nothing is queued, show a terminal/loading/error
