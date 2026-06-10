@@ -1,11 +1,11 @@
 [package]
-name = "triage-tool"
+name = "cull"
 version = "0.1.0"
 edition = "2021"
 description = "Fullscreen triage tool for a directory of images (keep/trash via rename(2))"
 
 [[bin]]
-name = "triage-tool"
+name = "cull"
 path = "src/main.rs"
 
 [[bin]]

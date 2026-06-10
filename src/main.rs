@@ -7,9 +7,9 @@
 //! sorted-free single pass over the source tree, so work scales with the
 //! unprocessed backlog rather than total generations.
 
+use cull::config::{Config, RawConfig};
+use cull::server::{router, AppState};
 use std::sync::Arc;
-use triage_tool::config::{Config, RawConfig};
-use triage_tool::server::{router, AppState};
 
 #[tokio::main]
 async fn main() {
@@ -22,7 +22,7 @@ async fn main() {
     let cfg = match load_config() {
         Ok(cfg) => cfg,
         Err(msg) => {
-            eprintln!("triage-tool: configuration error: {msg}");
+            eprintln!("cull: configuration error: {msg}");
             std::process::exit(1);
         }
     };
@@ -35,7 +35,7 @@ async fn main() {
         order = ?cfg.order,
         undo_depth = cfg.undo_depth,
         %bind_addr,
-        "starting triage-tool"
+        "starting cull"
     );
 
     let state = Arc::new(AppState::new(cfg));
@@ -43,13 +43,13 @@ async fn main() {
     let listener = match tokio::net::TcpListener::bind(bind_addr).await {
         Ok(l) => l,
         Err(e) => {
-            eprintln!("triage-tool: failed to bind {bind_addr}: {e}");
+            eprintln!("cull: failed to bind {bind_addr}: {e}");
             std::process::exit(1);
         }
     };
 
     if let Err(e) = axum::serve(listener, router(state)).await {
-        eprintln!("triage-tool: server error: {e}");
+        eprintln!("cull: server error: {e}");
         std::process::exit(1);
     }
 }

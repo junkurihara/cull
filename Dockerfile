@@ -14,7 +14,7 @@ COPY src ./src
 COPY static ./static
 
 # Build only the server binary (gen_fixtures is a dev tool, not shipped).
-RUN cargo build --release --bin triage-tool
+RUN cargo build --release --bin cull
 
 # ---- runtime ----------------------------------------------------------------
 # distroless/cc provides glibc + libgcc for the dynamically linked binary, with
@@ -23,7 +23,7 @@ RUN cargo build --release --bin triage-tool
 # permission on the bind-mounted output volume (design.md §9).
 FROM gcr.io/distroless/cc-debian12 AS runtime
 
-COPY --from=builder /build/target/release/triage-tool /usr/local/bin/triage-tool
+COPY --from=builder /build/target/release/cull /usr/local/bin/cull
 
 # Defaults; override at run time as needed (design.md §13).
 ENV SOURCE_DIR=/data/images \
@@ -34,7 +34,7 @@ ENV SOURCE_DIR=/data/images \
 EXPOSE 8080
 USER 1000:1000
 
-ENTRYPOINT ["/usr/local/bin/triage-tool"]
+ENTRYPOINT ["/usr/local/bin/cull"]
 
 # Run (single-FS requirement: keep/trash live under the mounted output volume):
 #
@@ -44,7 +44,7 @@ ENTRYPOINT ["/usr/local/bin/triage-tool"]
 #     --user 1000:1000 \
 #     --security-opt no-new-privileges \
 #     --cap-drop ALL \
-#     triage-tool
+#     cull
 #
 # Authentication is terminated upstream by a TLS-terminating reverse proxy; the app listens plain
 # HTTP inside the docker network and implements no auth of its own (§9).

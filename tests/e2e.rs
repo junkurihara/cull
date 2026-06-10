@@ -5,11 +5,11 @@
 //! extraction and its fallbacks, and a move + undo round trip preserving the
 //! relative subpath.
 
+use cull::config::{Config, Order, RawConfig};
+use cull::fixtures;
+use cull::moves::{self, UndoStack};
+use cull::{meta, walk};
 use std::path::PathBuf;
-use triage_tool::config::{Config, Order, RawConfig};
-use triage_tool::fixtures;
-use triage_tool::moves::{self, UndoStack};
-use triage_tool::{meta, walk};
 
 fn fixture_config() -> (Config, tempfile::TempDir) {
     let tmp = tempfile::tempdir().unwrap();

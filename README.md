@@ -1,4 +1,4 @@
-# triage-tool
+# cull
 
 Fullscreen triage for a directory of images. Displays generated images one at a
 time and moves the chosen ones into `keep` / `trash` via `rename(2)`. Rust +
@@ -12,22 +12,22 @@ out), not with total generations. See `.tmp/design.md` for the full spec.
 ## Build & run
 
 ```sh
-cargo build --release --bin triage-tool
-SOURCE_DIR=/path/to/output ./target/release/triage-tool
+cargo build --release --bin cull
+SOURCE_DIR=/path/to/output ./target/release/cull
 # open http://localhost:8080
 ```
 
 ### Docker
 
 ```sh
-docker build -t triage-tool .
+docker build -t cull .
 docker run --rm \
   -p 8080:8080 \
   -v /data/images:/data/images:rw \
   --user 1000:1000 \
   --security-opt no-new-privileges \
   --cap-drop ALL \
-  triage-tool
+  cull
 ```
 
 Or with Docker Compose (hardened: `user 1000:1000`, `cap_drop ALL`,
@@ -87,7 +87,7 @@ is empty or the moved file has been reclaimed externally.
 ```sh
 cargo test                       # unit + http + e2e
 cargo run --bin gen_fixtures     # write synthetic fixtures into .tmp/fixtures/
-SOURCE_DIR=$PWD/.tmp/fixtures/output cargo run --bin triage-tool
+SOURCE_DIR=$PWD/.tmp/fixtures/output cargo run --bin cull
 ```
 
 Metadata extraction targets PNG `tEXt` `prompt` chunks; non-PNG inputs simply

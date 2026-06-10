@@ -1,13 +1,13 @@
 # docker compose up --build
 #
-# Runtime container for triage-tool (design.md §9). This is the *runtime*
+# Runtime container for cull (design.md §9). This is the *runtime*
 # deployment, distinct from the Claude Code dev sandbox.
 services:
-  triage-tool:
+  cull:
     build:
       context: .
-    image: triage-tool:latest
-    container_name: triage-tool
+    image: cull:latest
+    container_name: cull
 
     # Run as uid/gid 1000 (match the image owner's uid) so rename(2) into keep/trash has
     # write permission on the bind-mounted output volume. Non-root.
