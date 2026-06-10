@@ -19,7 +19,7 @@ pub enum Order {
 }
 
 /// Default values (design.md §13). Kept as constants so tests and docs agree.
-pub const DEFAULT_SOURCE_DIR: &str = "/srv/enc/warm/comfyui/output";
+pub const DEFAULT_SOURCE_DIR: &str = "/data/images";
 pub const DEFAULT_ORDER: Order = Order::Asc;
 pub const DEFAULT_EXTENSIONS: &str = "png,jpg,jpeg,webp";
 pub const DEFAULT_UNDO_DEPTH: usize = 50;

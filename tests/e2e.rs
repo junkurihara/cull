@@ -47,12 +47,12 @@ fn enumeration_order_and_prune() {
     assert_eq!(
         all,
         vec![
-            "2026-06-01/ComfyUI_00001_.png",
-            "2026-06-01/ComfyUI_00002_.png",
-            "ComfyUI_00001_.png",
-            "ComfyUI_00002_.png",
-            "ComfyUI_00003_.png",
-            "proj-a/ComfyUI_00009_.png",
+            "2026-06-01/Image_00001_.png",
+            "2026-06-01/Image_00002_.png",
+            "Image_00001_.png",
+            "Image_00002_.png",
+            "Image_00003_.png",
+            "proj-a/Image_00009_.png",
             "proj-a/keep/inside.png",
         ]
     );
@@ -80,7 +80,7 @@ fn meta_extraction_variants() {
     let (cfg, _tmp) = fixture_config();
 
     // (d) graph present -> positive/negative extracted.
-    let m = meta::extract_meta(&cfg.source_dir.join("ComfyUI_00001_.png"));
+    let m = meta::extract_meta(&cfg.source_dir.join("Image_00001_.png"));
     assert!(m.raw.is_some());
     assert_eq!(m.prompts.len(), 1);
     assert!(m.prompts[0]
@@ -91,12 +91,12 @@ fn meta_extraction_variants() {
     assert!(m.prompts[0].negative.as_deref().unwrap().contains("blurry"));
 
     // plain PNG -> no metadata at all.
-    let m = meta::extract_meta(&cfg.source_dir.join("ComfyUI_00002_.png"));
+    let m = meta::extract_meta(&cfg.source_dir.join("Image_00002_.png"));
     assert!(m.raw.is_none());
     assert!(m.prompts.is_empty());
 
     // (d) broken JSON -> raw text shown, no prompts (graceful fallback).
-    let m = meta::extract_meta(&cfg.source_dir.join("ComfyUI_00003_.png"));
+    let m = meta::extract_meta(&cfg.source_dir.join("Image_00003_.png"));
     assert_eq!(m.raw.as_deref(), Some("{ this is not valid json"));
     assert!(m.prompts.is_empty());
 }
@@ -104,7 +104,7 @@ fn meta_extraction_variants() {
 #[test]
 fn move_preserves_subpath_and_undo_round_trips() {
     let (cfg, _tmp) = fixture_config();
-    let rel = "2026-06-01/ComfyUI_00001_.png";
+    let rel = "2026-06-01/Image_00001_.png";
     let source_abs = cfg.source_dir.join(rel);
     assert!(source_abs.is_file());
 
@@ -134,5 +134,5 @@ fn gen_fixtures_builder_is_idempotent() {
     let source: PathBuf = tmp.path().join("output");
     fixtures::build(&source).unwrap();
     fixtures::build(&source).unwrap();
-    assert!(source.join("ComfyUI_00001_.png").is_file());
+    assert!(source.join("Image_00001_.png").is_file());
 }

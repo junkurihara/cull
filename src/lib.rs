@@ -1,4 +1,4 @@
-//! Image triage tool for ComfyUI output (library crate).
+//! Image-directory triage tool (library crate).
 //!
 //! The binaries (`triage-tool`, `gen_fixtures`) are thin wrappers over these
 //! modules. Exposing the logic as a library keeps `pub` items on a real API

@@ -9,7 +9,7 @@
 //! generations.
 //!
 //! Relative paths use '/' separators and are compared byte-lexicographically,
-//! which equals generation order for ComfyUI's zero-padded counters
+//! which equals generation order for the generator's zero-padded counters
 //! (design.md §3).
 
 use crate::config::{Config, Order};
@@ -100,7 +100,7 @@ fn walk_dir(cfg: &Config, dir: &Path, rel: &str, f: &mut dyn FnMut(&str)) -> io:
         let os_name = entry.file_name();
         let name = match os_name.to_str() {
             Some(n) => n,
-            None => continue, // non-UTF8 names are not produced by ComfyUI
+            None => continue, // non-UTF8 names are not produced by the generator
         };
         if name.starts_with('.') {
             continue; // hidden files and directories are excluded (design.md §2)
@@ -148,11 +148,11 @@ mod tests {
     ///
     /// ```text
     /// output/
-    ///   2026-06-01/ComfyUI_00001_.png
-    ///   ComfyUI_00001_.png
-    ///   ComfyUI_00002_.png
+    ///   2026-06-01/Image_00001_.png
+    ///   Image_00001_.png
+    ///   Image_00002_.png
     ///   UPPER.PNG                  (uppercase extension -> still matches)
-    ///   proj-a/ComfyUI_00009_.png
+    ///   proj-a/Image_00009_.png
     ///   proj-a/keep/inside.png     (confusing "keep" -> NOT pruned, path != KEEP_DIR)
     ///   .hidden.png                (hidden -> excluded)
     ///   notes.txt                  (non-image -> excluded)
@@ -177,11 +177,11 @@ mod tests {
             fs::create_dir_all(p.parent().unwrap()).unwrap();
             fs::write(p, b"x").unwrap();
         };
-        write("2026-06-01/ComfyUI_00001_.png");
-        write("ComfyUI_00001_.png");
-        write("ComfyUI_00002_.png");
+        write("2026-06-01/Image_00001_.png");
+        write("Image_00001_.png");
+        write("Image_00002_.png");
         write("UPPER.PNG");
-        write("proj-a/ComfyUI_00009_.png");
+        write("proj-a/Image_00009_.png");
         write("proj-a/keep/inside.png");
         write(".hidden.png");
         write("notes.txt");
@@ -206,11 +206,11 @@ mod tests {
     fn expected_order() -> Vec<String> {
         // Byte-lexicographic over relpaths: '2' < 'C' < 'U' < 'p'.
         [
-            "2026-06-01/ComfyUI_00001_.png",
-            "ComfyUI_00001_.png",
-            "ComfyUI_00002_.png",
+            "2026-06-01/Image_00001_.png",
+            "Image_00001_.png",
+            "Image_00002_.png",
             "UPPER.PNG",
-            "proj-a/ComfyUI_00009_.png",
+            "proj-a/Image_00009_.png",
             "proj-a/keep/inside.png",
         ]
         .iter()
@@ -238,7 +238,7 @@ mod tests {
         let (mut cfg, _tmp) = setup();
         assert_eq!(
             find_next(&cfg, None).unwrap().as_deref(),
-            Some("2026-06-01/ComfyUI_00001_.png")
+            Some("2026-06-01/Image_00001_.png")
         );
         cfg.order = Order::Desc;
         assert_eq!(

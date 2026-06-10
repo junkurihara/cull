@@ -122,17 +122,17 @@ mod tests {
     #[test]
     fn accepts_file_in_source_root() {
         let (cfg, _tmp) = test_config();
-        touch(&cfg.source_dir.join("ComfyUI_00001_.png"));
-        let resolved = validate_relpath(&cfg, "ComfyUI_00001_.png").unwrap();
-        assert_eq!(resolved, cfg.source_dir.join("ComfyUI_00001_.png"));
+        touch(&cfg.source_dir.join("Image_00001_.png"));
+        let resolved = validate_relpath(&cfg, "Image_00001_.png").unwrap();
+        assert_eq!(resolved, cfg.source_dir.join("Image_00001_.png"));
     }
 
     #[test]
     fn accepts_file_in_subdir() {
         let (cfg, _tmp) = test_config();
-        touch(&cfg.source_dir.join("2026-06-01/ComfyUI_00007_.png"));
-        let resolved = validate_relpath(&cfg, "2026-06-01/ComfyUI_00007_.png").unwrap();
-        assert!(resolved.ends_with("2026-06-01/ComfyUI_00007_.png"));
+        touch(&cfg.source_dir.join("2026-06-01/Image_00007_.png"));
+        let resolved = validate_relpath(&cfg, "2026-06-01/Image_00007_.png").unwrap();
+        assert!(resolved.ends_with("2026-06-01/Image_00007_.png"));
     }
 
     #[test]

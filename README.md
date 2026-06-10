@@ -1,6 +1,6 @@
 # triage-tool
 
-Fullscreen image triage for ComfyUI output. Displays generated images one at a
+Fullscreen triage for a directory of images. Displays generated images one at a
 time and moves the chosen ones into `keep` / `trash` via `rename(2)`. Rust +
 axum, single binary with an embedded single-page UI.
 
@@ -23,7 +23,7 @@ SOURCE_DIR=/path/to/output ./target/release/triage-tool
 docker build -t triage-tool .
 docker run --rm \
   -p 8080:8080 \
-  -v /srv/enc/warm/comfyui/output:/srv/enc/warm/comfyui/output:rw \
+  -v /data/images:/data/images:rw \
   --user 1000:1000 \
   --security-opt no-new-privileges \
   --cap-drop ALL \
@@ -34,7 +34,7 @@ Or with Docker Compose (hardened: `user 1000:1000`, `cap_drop ALL`,
 `no-new-privileges`, read-only rootfs):
 
 ```sh
-COMFY_OUTPUT=/srv/enc/warm/comfyui/output docker compose up --build
+IMAGE_DIR=/data/images docker compose up --build
 ```
 
 `keep`/`trash` must sit on the **same filesystem** as the source (move is
@@ -42,7 +42,7 @@ COMFY_OUTPUT=/srv/enc/warm/comfyui/output docker compose up --build
 By default they are `$SOURCE_DIR/keep` and `$SOURCE_DIR/trash`, so mounting the
 output volume read-write is sufficient.
 
-Authentication is terminated upstream (e.g. rpxy / mTLS); the app listens plain
+Authentication is terminated upstream by a TLS-terminating reverse proxy; the app listens plain
 HTTP and implements no auth of its own.
 
 ## Controls
@@ -64,7 +64,7 @@ is empty or the moved file has been reclaimed externally.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `SOURCE_DIR`  | `/srv/enc/warm/comfyui/output` | Read root (walked recursively; keep/trash pruned) |
+| `SOURCE_DIR`  | `/data/images` | Read root (walked recursively; keep/trash pruned) |
 | `KEEP_DIR`    | `$SOURCE_DIR/keep`  | keep destination |
 | `TRASH_DIR`   | `$SOURCE_DIR/trash` | trash destination |
 | `ORDER`       | `asc`               | `asc` = oldest first, `desc` = newest first |

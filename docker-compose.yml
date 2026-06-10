@@ -9,7 +9,7 @@ services:
     image: triage-tool:latest
     container_name: triage-tool
 
-    # Run as uid/gid 1000 (same as ComfyUI) so rename(2) into keep/trash has
+    # Run as uid/gid 1000 (match the image owner's uid) so rename(2) into keep/trash has
     # write permission on the bind-mounted output volume. Non-root.
     user: "1000:1000"
 
@@ -23,7 +23,7 @@ services:
     read_only: true
 
     environment:
-      SOURCE_DIR: /srv/enc/warm/comfyui/output
+      SOURCE_DIR: /data/images
       # KEEP_DIR / TRASH_DIR default to $SOURCE_DIR/keep and /trash, which keeps
       # them on the same filesystem as the source (rename(2) requirement).
       BIND_ADDR: 0.0.0.0:8080
@@ -32,14 +32,14 @@ services:
       # UNDO_DEPTH: "50"
       RUST_LOG: info
 
-    # Mount the ComfyUI output read-write (move needs to write keep/trash).
-    # Override the host path via COMFY_OUTPUT in a .env file if needed.
+    # Mount the image directory read-write (move needs to write keep/trash).
+    # Override the host path via IMAGE_DIR in a .env file if needed.
     volumes:
-      - ${COMFY_OUTPUT:-/srv/enc/warm/comfyui/output}:/srv/enc/warm/comfyui/output:rw
+      - ${IMAGE_DIR:-/data/images}:/data/images:rw
 
-    # Publish the port for direct/local access. In the rpxy (mTLS) deployment,
-    # drop `ports` and attach the shared proxy network instead (see below);
-    # the app itself implements no authentication (§9).
+    # Publish the port for direct/local access. Behind a TLS-terminating
+    # reverse proxy, drop `ports` and attach the shared proxy network instead
+    # (see below); the app itself implements no authentication (§9).
     ports:
       - "8080:8080"
 
@@ -48,9 +48,9 @@ services:
     # No healthcheck: the distroless image has no shell or curl to probe with,
     # and the app exposes no health endpoint. Liveness is observed via logs.
 
-# rpxy integration (mTLS terminated upstream): remove the `ports` mapping above
-# and uncomment the network wiring below so rpxy can reach the plain-HTTP app
-# over a shared docker network.
+# Reverse-proxy integration (TLS terminated upstream): remove the `ports`
+# mapping above and uncomment the network wiring below so the proxy can reach
+# the plain-HTTP app over a shared docker network.
 #
 #    networks:
 #      - edge
@@ -58,4 +58,4 @@ services:
 # networks:
 #   edge:
 #     external: true
-#     name: rpxy
+#     name: edge

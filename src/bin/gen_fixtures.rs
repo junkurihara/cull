@@ -1,6 +1,6 @@
 //! Synthetic fixture generator (design.md sandbox constraints).
 //!
-//! Writes fake ComfyUI output into `<target>/output` for manual inspection and
+//! Writes a synthetic image-output tree into `<target>/output` for manual inspection and
 //! as material for the meta-extraction tests. The reusable layout lives in
 //! `triage_tool::fixtures`; this binary just chooses where to write.
 //!

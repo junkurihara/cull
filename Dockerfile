@@ -19,14 +19,14 @@ RUN cargo build --release --bin triage-tool
 # ---- runtime ----------------------------------------------------------------
 # distroless/cc provides glibc + libgcc for the dynamically linked binary, with
 # no shell or package manager (minimal attack surface). It runs as whatever uid
-# is set; we use 1000 to match ComfyUI so rename(2) into keep/trash has write
+# is set; we use 1000 to match the image owner so rename(2) into keep/trash has write
 # permission on the bind-mounted output volume (design.md §9).
 FROM gcr.io/distroless/cc-debian12 AS runtime
 
 COPY --from=builder /build/target/release/triage-tool /usr/local/bin/triage-tool
 
 # Defaults; override at run time as needed (design.md §13).
-ENV SOURCE_DIR=/srv/enc/warm/comfyui/output \
+ENV SOURCE_DIR=/data/images \
     BIND_ADDR=0.0.0.0:8080 \
     ORDER=asc \
     RUST_LOG=info
@@ -40,11 +40,11 @@ ENTRYPOINT ["/usr/local/bin/triage-tool"]
 #
 #   docker run --rm \
 #     -p 8080:8080 \
-#     -v /srv/enc/warm/comfyui/output:/srv/enc/warm/comfyui/output:rw \
+#     -v /data/images:/data/images:rw \
 #     --user 1000:1000 \
 #     --security-opt no-new-privileges \
 #     --cap-drop ALL \
 #     triage-tool
 #
-# Authentication is terminated upstream (rpxy / mTLS); the app listens plain
+# Authentication is terminated upstream by a TLS-terminating reverse proxy; the app listens plain
 # HTTP inside the docker network and implements no auth of its own (§9).

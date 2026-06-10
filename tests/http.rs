@@ -17,8 +17,8 @@ fn state_with_tree() -> (Arc<AppState>, tempfile::TempDir) {
     std::fs::create_dir_all(&source).unwrap();
 
     // A couple of valid 1x1 PNGs (so meta/extension handling is realistic).
-    write_png(&source.join("ComfyUI_00001_.png"));
-    write_png(&source.join("ComfyUI_00002_.png"));
+    write_png(&source.join("Image_00001_.png"));
+    write_png(&source.join("Image_00002_.png"));
 
     let src = source.to_str().unwrap().to_string();
     let cfg = RawConfig::load(move |k: &str| match k {
@@ -97,10 +97,10 @@ async fn next_returns_min_then_204_when_drained() {
 
     let (status, body) = get(&state, "/api/next").await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(json(&body)["relpath"], "ComfyUI_00001_.png");
+    assert_eq!(json(&body)["relpath"], "Image_00001_.png");
 
     // Advancing past the last entry drains the queue.
-    let (status, _) = get(&state, "/api/next?after=ComfyUI_00002_.png").await;
+    let (status, _) = get(&state, "/api/next?after=Image_00002_.png").await;
     assert_eq!(status, StatusCode::NO_CONTENT);
 }
 
@@ -110,7 +110,7 @@ async fn image_serves_png_content_type() {
     let resp = router(state.clone())
         .oneshot(
             Request::builder()
-                .uri("/api/image/ComfyUI_00001_.png")
+                .uri("/api/image/Image_00001_.png")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -138,9 +138,9 @@ async fn keep_then_undo_round_trip() {
 
     // keep the first image
     let (status, body) =
-        post_json(&state, "/api/keep", json!({"relpath":"ComfyUI_00001_.png"})).await;
+        post_json(&state, "/api/keep", json!({"relpath":"Image_00001_.png"})).await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(body["relpath"], "ComfyUI_00001_.png");
+    assert_eq!(body["relpath"], "Image_00001_.png");
     assert_eq!(body["can_undo"], true);
 
     // backlog dropped by one
@@ -150,7 +150,7 @@ async fn keep_then_undo_round_trip() {
     // undo restores it
     let (status, body) = post_json(&state, "/api/undo", json!({})).await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(body["relpath"], "ComfyUI_00001_.png");
+    assert_eq!(body["relpath"], "Image_00001_.png");
     assert_eq!(body["can_undo"], false);
 
     let (_, body) = get(&state, "/api/count").await;
@@ -174,7 +174,7 @@ async fn keep_with_traversal_is_400() {
 #[tokio::test]
 async fn meta_for_plain_png_is_empty() {
     let (state, _tmp) = state_with_tree();
-    let (status, body) = get(&state, "/api/meta/ComfyUI_00001_.png").await;
+    let (status, body) = get(&state, "/api/meta/Image_00001_.png").await;
     assert_eq!(status, StatusCode::OK);
     let v = json(&body);
     assert!(v["raw"].is_null());

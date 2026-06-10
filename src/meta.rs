@@ -2,7 +2,7 @@
 //!
 //! Triggered for a single image at a time (the `i` key / tap), never as part
 //! of enumeration, so the cost stays off the hot path. We read the PNG text
-//! chunks (tEXt/zTXt/iTXt) only up to the IDAT — ComfyUI writes its `prompt`
+//! chunks (tEXt/zTXt/iTXt) only up to the IDAT — image generators write their `prompt`
 //! and `workflow` chunks before the image data, so pixels are never decoded.
 //!
 //! Extraction is layered and best-effort:
@@ -74,7 +74,7 @@ pub fn extract_meta(path: &Path) -> Meta {
 fn read_prompt_text(path: &Path) -> Option<String> {
     let file = File::open(path).ok()?;
     let decoder = png::Decoder::new(BufReader::new(file));
-    // read_info parses chunks up to IDAT; ComfyUI's metadata lives there.
+    // read_info parses chunks up to IDAT; the generator's metadata lives there.
     let reader = decoder.read_info().ok()?;
     let info = reader.info();
 
@@ -197,7 +197,7 @@ fn node_text(node: &Value) -> Option<String> {
     }
 }
 
-/// Order node ids numerically when both are integers (the ComfyUI convention),
+/// Order node ids numerically when both are integers (the common generator convention),
 /// otherwise lexicographically.
 fn node_id_cmp(a: &str, b: &str) -> Ordering {
     match (a.parse::<u64>(), b.parse::<u64>()) {

@@ -1,4 +1,4 @@
-//! Image triage tool for ComfyUI output.
+//! Image-directory triage tool.
 //!
 //! Serves a single-page app that displays generated images one at a time and
 //! moves the chosen ones into keep/trash directories via `rename(2)`. See

@@ -2,7 +2,7 @@
 name = "triage-tool"
 version = "0.1.0"
 edition = "2021"
-description = "Fullscreen image triage tool for ComfyUI output (keep/trash via rename(2))"
+description = "Fullscreen triage tool for a directory of images (keep/trash via rename(2))"
 
 [[bin]]
 name = "triage-tool"

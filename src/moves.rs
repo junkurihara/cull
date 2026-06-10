@@ -233,7 +233,7 @@ mod tests {
     #[test]
     fn move_preserves_relative_subpath() {
         let d = dirs();
-        let rel = "2026-06-01/ComfyUI_00001_.png";
+        let rel = "2026-06-01/Image_00001_.png";
         let src = d.source.join(rel);
         write(&src, b"img");
 
