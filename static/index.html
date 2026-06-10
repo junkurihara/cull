@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="ja">
+<html lang="en">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
@@ -270,7 +270,7 @@
       <span id="relpath"></span>
       <span id="hints">→ keep · ← trash · ↓ skip · ⌫ undo · i meta</span>
     </div>
-    <div id="message">読み込み中…</div>
+    <div id="message">Loading…</div>
     <div id="meta"></div>
     <div id="toast"></div>
     <div id="fx"></div>
@@ -393,7 +393,7 @@
       }
 
       function updateCount() {
-        els.count.textContent = backlog == null ? "" : "~" + Math.max(0, backlog) + " 残";
+        els.count.textContent = backlog == null ? "" : "~" + Math.max(0, backlog) + " left";
       }
 
       function showMessage(text, clickable) {
@@ -496,11 +496,11 @@
           els.img.removeAttribute("src");
           els.relpath.textContent = "";
           if (loadError) {
-            showMessage("読み込みに失敗しました。タップ / クリックで再試行", true);
+            showMessage("Load failed — tap / click to retry", true);
           } else if (exhausted) {
-            showMessage("すべて選別済み 🎉");
+            showMessage("All sorted 🎉");
           } else {
-            showMessage("画像をスキャン中… 大量の場合は初回に時間がかかります");
+            showMessage("Scanning images… the first load can take a while for large libraries");
           }
           if (metaOpen) renderMeta(null);
           return;
@@ -543,14 +543,14 @@
             body: JSON.stringify({ relpath: rel }),
           });
           if (!res.ok) {
-            toast(action + " に失敗しました (" + res.status + ")");
+            toast(action + " failed (" + res.status + ")");
             clearMotion(); // it did not move; bring the image back
             return;
           }
           await minAnim; // let the slide-out finish before the next fades in
           await advance(true, true);
         } catch (e) {
-          toast(action + " に失敗しました");
+          toast(action + " failed");
           clearMotion();
         } finally {
           busy = false;
@@ -579,11 +579,11 @@
         try {
           const res = await fetch(api("api/undo"), { method: "POST" });
           if (res.status === 409) {
-            toast("もう戻せません");
+            toast("Nothing to undo");
             return;
           }
           if (!res.ok) {
-            toast("undo に失敗しました (" + res.status + ")");
+            toast("undo failed (" + res.status + ")");
             return;
           }
           const data = await res.json();
@@ -597,7 +597,7 @@
           render(true);
           prefetch();
         } catch (e) {
-          toast("undo に失敗しました");
+          toast("undo failed");
         } finally {
           busy = false;
         }
@@ -606,7 +606,7 @@
       // ---- metadata panel ----
       function renderMeta(meta) {
         if (meta == null) {
-          els.meta.innerHTML = "<p style='opacity:.5'>メタデータなし</p>";
+          els.meta.innerHTML = "<p style='opacity:.5'>No metadata</p>";
           return;
         }
         let html = "";
@@ -626,7 +626,7 @@
         if (meta.raw != null) {
           html += "<h3>raw</h3><pre>" + escapeHtml(meta.raw) + "</pre>";
         }
-        if (!html) html = "<p style='opacity:.5'>メタデータなし</p>";
+        if (!html) html = "<p style='opacity:.5'>No metadata</p>";
         els.meta.innerHTML = html;
       }
 
@@ -638,7 +638,7 @@
       }
 
       async function loadMeta(rel) {
-        els.meta.innerHTML = "<p style='opacity:.5'>読み込み中…</p>";
+        els.meta.innerHTML = "<p style='opacity:.5'>Loading…</p>";
         try {
           const res = await fetch(metaUrl(rel));
           if (!res.ok) {
