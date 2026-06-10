@@ -1,0 +1,61 @@
+# docker compose up --build
+#
+# Runtime container for triage-tool (design.md §9). This is the *runtime*
+# deployment, distinct from the Claude Code dev sandbox.
+services:
+  triage-tool:
+    build:
+      context: .
+    image: triage-tool:latest
+    container_name: triage-tool
+
+    # Run as uid/gid 1000 (same as ComfyUI) so rename(2) into keep/trash has
+    # write permission on the bind-mounted output volume. Non-root.
+    user: "1000:1000"
+
+    # Hardening: no privilege escalation, drop all capabilities, read-only root
+    # filesystem. The app writes only into the mounted output volume (keep/trash
+    # default to children of SOURCE_DIR), never to the container rootfs.
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+
+    environment:
+      SOURCE_DIR: /srv/enc/warm/comfyui/output
+      # KEEP_DIR / TRASH_DIR default to $SOURCE_DIR/keep and /trash, which keeps
+      # them on the same filesystem as the source (rename(2) requirement).
+      BIND_ADDR: 0.0.0.0:8080
+      ORDER: asc
+      # EXTENSIONS: png,jpg,jpeg,webp
+      # UNDO_DEPTH: "50"
+      RUST_LOG: info
+
+    # Mount the ComfyUI output read-write (move needs to write keep/trash).
+    # Override the host path via COMFY_OUTPUT in a .env file if needed.
+    volumes:
+      - ${COMFY_OUTPUT:-/srv/enc/warm/comfyui/output}:/srv/enc/warm/comfyui/output:rw
+
+    # Publish the port for direct/local access. In the rpxy (mTLS) deployment,
+    # drop `ports` and attach the shared proxy network instead (see below);
+    # the app itself implements no authentication (§9).
+    ports:
+      - "8080:8080"
+
+    restart: unless-stopped
+
+    # No healthcheck: the distroless image has no shell or curl to probe with,
+    # and the app exposes no health endpoint. Liveness is observed via logs.
+
+# rpxy integration (mTLS terminated upstream): remove the `ports` mapping above
+# and uncomment the network wiring below so rpxy can reach the plain-HTTP app
+# over a shared docker network.
+#
+#    networks:
+#      - edge
+#
+# networks:
+#   edge:
+#     external: true
+#     name: rpxy
