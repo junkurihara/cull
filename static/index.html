@@ -37,6 +37,31 @@
         object-fit: contain;
         user-select: none;
         -webkit-user-drag: none;
+        transition: transform 0.17s ease-out, opacity 0.17s ease-out;
+        will-change: transform, opacity;
+      }
+      /* Directional slide-out of the current image when an action fires. */
+      #img.out-right {
+        transform: translateX(70%);
+        opacity: 0;
+      }
+      #img.out-left {
+        transform: translateX(-70%);
+        opacity: 0;
+      }
+      #img.out-down {
+        transform: translateY(70%);
+        opacity: 0;
+      }
+      @media (prefers-reduced-motion: reduce) {
+        #img {
+          transition: opacity 0.12s ease-out;
+        }
+        #img.out-right,
+        #img.out-left,
+        #img.out-down {
+          transform: none;
+        }
       }
       /* Top status bar */
       #bar {
@@ -397,9 +422,57 @@
         toastTimer = setTimeout(() => els.toast.classList.remove("show"), 1800);
       }
 
+      // ---- action motion: slide the image to make each action legible,
+      // which matters most on touch where there is no cursor cue.
+      const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+      const ANIM_MS = 170;
+      const OUT_CLASS = { right: "out-right", left: "out-left", down: "out-down" };
+      const ENTER_START = {
+        left: "translateX(-70%)",
+        right: "translateX(70%)",
+        top: "translateY(-70%)",
+      };
+
+      // Slide the current image out toward `dir` (right=keep, left=trash, down=skip).
+      function animateOut(dir) {
+        els.img.classList.add(OUT_CLASS[dir]);
+      }
+
+      // Snap the image back to centre (used when an action failed).
+      function clearMotion() {
+        els.img.classList.remove("out-right", "out-left", "out-down");
+        els.img.style.transition = "";
+        els.img.style.transform = "";
+        els.img.style.opacity = "";
+      }
+
+      // Swap to `rel`; if `enterFrom` is given, the new image slides in from
+      // that edge (the opposite side to the outgoing one).
+      function showImage(rel, enterFrom) {
+        els.img.classList.remove("out-right", "out-left", "out-down");
+        if (enterFrom && ENTER_START[enterFrom]) {
+          els.img.style.transition = "none";
+          els.img.style.transform = ENTER_START[enterFrom];
+          els.img.style.opacity = "0";
+          els.img.src = imageUrl(rel);
+          // Next frame: re-enable the transition and glide to centre.
+          requestAnimationFrame(() => {
+            els.img.style.transition = "";
+            els.img.style.transform = "";
+            els.img.style.opacity = "";
+          });
+        } else {
+          els.img.style.transition = "";
+          els.img.style.transform = "";
+          els.img.style.opacity = "";
+          els.img.src = imageUrl(rel);
+        }
+      }
+
       // Render queue[0]. If nothing is queued, show a terminal/loading/error
-      // message. The error state is tappable to retry.
-      function render() {
+      // message. The error state is tappable to retry. `enterFrom` animates the
+      // incoming image in from that edge.
+      function render(enterFrom) {
         if (queue.length === 0) {
           els.img.removeAttribute("src");
           els.relpath.textContent = "";
@@ -415,28 +488,35 @@
         }
         showMessage(null);
         const rel = queue[0];
-        els.img.src = imageUrl(rel);
+        showImage(rel, enterFrom);
         els.relpath.textContent = rel;
         if (metaOpen) loadMeta(rel);
       }
 
       // Advance to the next image. `moved` indicates the current file left the
       // source tree (keep/trash) so the local backlog estimate drops.
-      async function advance(moved) {
+      async function advance(moved, enterFrom) {
         const shifted = queue.shift();
         tailAfter = shifted; // continuation point if the queue drains
         if (moved && backlog != null) backlog--;
         updateCount();
-        render();
+        // Animate the next image in only if it is already queued; if the queue
+        // drained, render() shows the scanning message and refill() paints the
+        // first image as soon as it arrives.
+        render(queue.length > 0 ? enterFrom : undefined);
         await refill();
         prefetch();
-        render(); // in case the queue was empty and refill produced an image
       }
 
       async function decide(action) {
         if (busy || queue.length === 0) return;
         const rel = queue[0];
         busy = true;
+        const dir = action === "keep" ? "right" : "left";
+        const enter = action === "keep" ? "left" : "right";
+        flash(action);
+        animateOut(dir); // the current image slides away immediately
+        const minAnim = wait(ANIM_MS);
         try {
           const res = await fetch(api("api/" + action), {
             method: "POST",
@@ -445,12 +525,14 @@
           });
           if (!res.ok) {
             toast(action + " に失敗しました (" + res.status + ")");
+            clearMotion(); // it did not move; bring the image back
             return;
           }
-          flash(action);
-          await advance(true);
+          await minAnim; // let the slide-out finish before the next slides in
+          await advance(true, enter);
         } catch (e) {
           toast(action + " に失敗しました");
+          clearMotion();
         } finally {
           busy = false;
         }
@@ -463,7 +545,9 @@
         busy = true;
         try {
           flash("skip");
-          await advance(false);
+          animateOut("down");
+          await wait(ANIM_MS);
+          await advance(false, "top");
         } finally {
           busy = false;
         }
@@ -484,12 +568,13 @@
           }
           const data = await res.json();
           flash("undo");
-          // The restored file is shown immediately (re-enters the queue front).
+          // The restored file is shown immediately (re-enters the queue front),
+          // sliding in from the top to mirror the upward undo gesture.
           queue.unshift(data.relpath);
           exhausted = false;
           if (backlog != null) backlog++;
           updateCount();
-          render();
+          render("top");
           prefetch();
         } catch (e) {
           toast("undo に失敗しました");
