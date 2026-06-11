@@ -170,15 +170,24 @@ impl UndoStack {
     }
 }
 
+/// The outcome of a successful undo: where the file was restored to, plus the
+/// (now vacated) destination it had been moved to, so the caller can classify
+/// which kind of move — keep or trash — was undone.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Undone {
+    pub restored_rel: String,
+    pub undid_dst: PathBuf,
+}
+
 /// Undo the most recent move: rename the recorded destination back under
 /// SOURCE_DIR at its original relative path (collision-resolved, so a
 /// regenerated file with the same name is not clobbered). Returns the relative
-/// path the file was restored to.
+/// path the file was restored to and the destination it came back from.
 ///
 /// The top entry is consumed whether the restore succeeds or the destination
 /// is already gone: a vanished destination is permanently unrecoverable, so
 /// keeping it would only wedge repeated undo attempts.
-pub fn undo(source_dir: &Path, stack: &mut UndoStack) -> Result<String, UndoError> {
+pub fn undo(source_dir: &Path, stack: &mut UndoStack) -> Result<Undone, UndoError> {
     let entry = stack.entries.pop_back().ok_or(UndoError::Empty)?;
 
     if !entry.dst.exists() {
@@ -199,7 +208,10 @@ pub fn undo(source_dir: &Path, stack: &mut UndoStack) -> Result<String, UndoErro
         .strip_prefix(source_dir)
         .map(|p| p.to_string_lossy().replace('\\', "/"))
         .unwrap_or(entry.original_rel);
-    Ok(restored_rel)
+    Ok(Undone {
+        restored_rel,
+        undid_dst: entry.dst,
+    })
 }
 
 #[cfg(test)]
@@ -269,8 +281,9 @@ mod tests {
         stack.push(perform_move(&d.keep, &src, rel).unwrap());
         assert_eq!(stack.len(), 1);
 
-        let restored = undo(&d.source, &mut stack).unwrap();
-        assert_eq!(restored, rel);
+        let undone = undo(&d.source, &mut stack).unwrap();
+        assert_eq!(undone.restored_rel, rel);
+        assert_eq!(undone.undid_dst, d.keep.join(rel));
         assert!(src.is_file(), "file should be back at original location");
         assert!(stack.is_empty());
     }
@@ -315,8 +328,8 @@ mod tests {
         // A new generation produced the same filename in the meantime.
         write(&src, b"regenerated");
 
-        let restored = undo(&d.source, &mut stack).unwrap();
-        assert_eq!(restored, "dup_1.png");
+        let undone = undo(&d.source, &mut stack).unwrap();
+        assert_eq!(undone.restored_rel, "dup_1.png");
         assert_eq!(fs::read(d.source.join("dup_1.png")).unwrap(), b"original");
         assert_eq!(fs::read(&src).unwrap(), b"regenerated");
     }

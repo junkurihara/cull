@@ -158,6 +158,37 @@ async fn keep_then_undo_round_trip() {
 }
 
 #[tokio::test]
+async fn stats_track_moves_and_undo() {
+    let (state, _tmp) = state_with_tree();
+
+    // A fresh server reports zeros.
+    let (status, body) = get(&state, "/api/stats").await;
+    assert_eq!(status, StatusCode::OK);
+    let v = json(&body);
+    assert_eq!(v["kept"], 0);
+    assert_eq!(v["trashed"], 0);
+
+    // Each move response echoes the updated totals.
+    let (_, body) = post_json(&state, "/api/keep", json!({"relpath":"Image_00001_.png"})).await;
+    assert_eq!(body["stats"]["kept"], 1);
+    assert_eq!(body["stats"]["trashed"], 0);
+
+    let (_, body) = post_json(&state, "/api/trash", json!({"relpath":"Image_00002_.png"})).await;
+    assert_eq!(body["stats"]["kept"], 1);
+    assert_eq!(body["stats"]["trashed"], 1);
+
+    // Undo (the last move was the trash) decrements the matching counter.
+    let (_, body) = post_json(&state, "/api/undo", json!({})).await;
+    assert_eq!(body["stats"]["kept"], 1);
+    assert_eq!(body["stats"]["trashed"], 0);
+
+    let (_, body) = get(&state, "/api/stats").await;
+    let v = json(&body);
+    assert_eq!(v["kept"], 1);
+    assert_eq!(v["trashed"], 0);
+}
+
+#[tokio::test]
 async fn undo_empty_is_409() {
     let (state, _tmp) = state_with_tree();
     let (status, _) = post_json(&state, "/api/undo", json!({})).await;

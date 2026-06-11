@@ -54,6 +54,13 @@ HTTP and implements no auth of its own.
 | skip  | ↓         | swipe down  |
 | undo  | Backspace | swipe up    |
 | meta  | `i`       | tap         |
+| zoom  | `+` / `-` / `0` | pinch; tap to reset |
+| help  | `?`       | `?` button  |
+
+The status bar shows the remaining backlog plus today's totals (`✓` kept /
+`✗` trashed). Totals are counted server-side per calendar day, so phone and
+desktop sessions add up; they are in-memory only and reset when the container
+restarts. Set `TZ_OFFSET_HOURS` so "today" rolls over at your local midnight.
 
 `skip` is client-only: it steps past the current image without changing server
 state, so it reappears after a refresh. `undo` is a bounded, in-memory "take
@@ -71,6 +78,7 @@ is empty or the moved file has been reclaimed externally.
 | `EXTENSIONS`  | `png,jpg,jpeg,webp` | image extensions to enumerate |
 | `UNDO_DEPTH`  | `50`                | max undo stack depth |
 | `BIND_ADDR`   | `0.0.0.0:8080`      | listen address |
+| `TZ_OFFSET_HOURS` | `0`             | UTC offset (whole hours) for the daily-stats day boundary, e.g. `9` for JST |
 
 ## API
 
@@ -81,6 +89,7 @@ is empty or the moved file has been reclaimed externally.
 - `POST /api/trash` `{ "relpath": ... }` — move to trash
 - `POST /api/undo` — undo the last move (409 if not possible)
 - `GET  /api/count` — approximate backlog size
+- `GET  /api/stats` — today's keep/trash totals (also echoed in move/undo responses)
 
 ## Development
 

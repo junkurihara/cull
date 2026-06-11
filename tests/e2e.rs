@@ -121,8 +121,9 @@ fn move_preserves_subpath_and_undo_round_trips() {
     assert!(!drain(&cfg).iter().any(|r| r == rel));
 
     // undo restores it to the original relative path; it re-enters the queue.
-    let restored = moves::undo(&cfg.source_dir, &mut stack).unwrap();
-    assert_eq!(restored, rel);
+    let undone = moves::undo(&cfg.source_dir, &mut stack).unwrap();
+    assert_eq!(undone.restored_rel, rel);
+    assert_eq!(undone.undid_dst, cfg.keep_dir.join(rel));
     assert!(source_abs.is_file());
     assert!(drain(&cfg).iter().any(|r| r == rel));
 }

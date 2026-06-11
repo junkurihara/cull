@@ -79,8 +79,89 @@
         opacity: 0.7;
         font-variant-numeric: tabular-nums;
       }
+      /* Today's keep/trash totals (server-side, shared across devices). */
+      #stats {
+        font-variant-numeric: tabular-nums;
+        white-space: nowrap;
+      }
+      #stats .st-k {
+        color: #9ccc65;
+      }
+      #stats .st-t {
+        color: #ef9a9a;
+      }
       #hints {
         opacity: 0.5;
+        font-size: 11px;
+      }
+      /* The keyboard hints are meaningless on a phone; the ? button covers it. */
+      @media (max-width: 600px) {
+        #hints {
+          display: none;
+        }
+      }
+      /* The bar ignores pointer events so taps reach the stage; the help
+         button opts back in. */
+      #helpbtn {
+        pointer-events: auto;
+        flex: none;
+        width: 22px;
+        height: 22px;
+        border-radius: 50%;
+        border: 1px solid #555;
+        background: rgba(0, 0, 0, 0.4);
+        color: #ccc;
+        font: inherit;
+        font-size: 12px;
+        line-height: 1;
+        cursor: pointer;
+        padding: 0;
+      }
+      /* Help overlay */
+      #help {
+        position: fixed;
+        inset: 0;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        background: rgba(0, 0, 0, 0.65);
+        z-index: 10;
+        cursor: pointer;
+      }
+      #help.show {
+        display: flex;
+      }
+      #helpcard {
+        background: rgba(15, 15, 15, 0.97);
+        border: 1px solid #333;
+        border-radius: 10px;
+        padding: 18px 22px;
+        font-size: 13px;
+        max-width: 90vw;
+        max-height: 85vh;
+        overflow: auto;
+      }
+      #helpcard table {
+        border-collapse: collapse;
+      }
+      #helpcard td {
+        padding: 2px 12px 2px 0;
+      }
+      #helpcard td:first-child {
+        opacity: 0.7;
+        white-space: nowrap;
+      }
+      #helpcard .sect td {
+        padding-top: 12px;
+        font-size: 11px;
+        font-weight: 600;
+        letter-spacing: 1px;
+        text-transform: uppercase;
+        opacity: 0.45;
+      }
+      #helpcard .close {
+        margin: 12px 0 0;
+        opacity: 0.4;
         font-size: 11px;
       }
       /* Centered messages (loading / done) */
@@ -267,10 +348,40 @@
     </div>
     <div id="bar">
       <span id="count">…</span>
+      <span id="stats"></span>
       <span id="relpath"></span>
-      <span id="hints">→ keep · ← trash · ↓ skip · ⌫ undo · i meta</span>
+      <span id="hints">→ keep · ← trash · ↓ skip · ⌫ undo · i meta · ? help</span>
+      <button id="helpbtn" type="button" aria-label="Help">?</button>
     </div>
     <div id="message">Loading…</div>
+    <div id="help">
+      <div id="helpcard">
+        <table>
+          <tr class="sect"><td colspan="2">Keyboard</td></tr>
+          <tr><td>→</td><td>keep</td></tr>
+          <tr><td>←</td><td>trash</td></tr>
+          <tr><td>↓</td><td>skip</td></tr>
+          <tr><td>⌫</td><td>undo</td></tr>
+          <tr><td>i</td><td>metadata panel</td></tr>
+          <tr><td>+ / − / 0</td><td>zoom in / out / reset</td></tr>
+          <tr><td>?</td><td>this help</td></tr>
+          <tr class="sect"><td colspan="2">Touch</td></tr>
+          <tr><td>swipe →</td><td>keep</td></tr>
+          <tr><td>swipe ←</td><td>trash</td></tr>
+          <tr><td>swipe ↓</td><td>skip</td></tr>
+          <tr><td>swipe ↑</td><td>undo</td></tr>
+          <tr><td>tap</td><td>metadata panel</td></tr>
+          <tr><td>pinch</td><td>zoom</td></tr>
+          <tr><td>drag / tap (zoomed)</td><td>pan / reset zoom</td></tr>
+          <tr class="sect"><td colspan="2">Mouse</td></tr>
+          <tr><td>wheel</td><td>zoom toward cursor</td></tr>
+          <tr><td>drag (zoomed)</td><td>pan</td></tr>
+          <tr class="sect"><td colspan="2">Status bar</td></tr>
+          <tr><td>✓ / ✗</td><td>kept / trashed today (all devices)</td></tr>
+        </table>
+        <p class="close">Tap anywhere or press any key to close</p>
+      </div>
+    </div>
     <div id="meta"></div>
     <div id="toast"></div>
     <div id="fx"></div>
@@ -288,11 +399,14 @@
         frame: document.getElementById("frame"),
         relpath: document.getElementById("relpath"),
         count: document.getElementById("count"),
+        stats: document.getElementById("stats"),
         message: document.getElementById("message"),
         meta: document.getElementById("meta"),
         toast: document.getElementById("toast"),
         fx: document.getElementById("fx"),
         badge: document.getElementById("badge"),
+        help: document.getElementById("help"),
+        helpbtn: document.getElementById("helpbtn"),
       };
 
       // Directional feedback for an action: an edge glow plus a center badge.
@@ -394,6 +508,18 @@
 
       function updateCount() {
         els.count.textContent = backlog == null ? "" : "~" + Math.max(0, backlog) + " left";
+      }
+
+      // Today's totals come from the server (so phone and PC sessions add up)
+      // and are echoed in every move/undo response — no extra requests.
+      function updateStats(s) {
+        if (!s) return;
+        els.stats.innerHTML =
+          '<span class="st-k">✓' +
+          (Number(s.kept) || 0) +
+          '</span> <span class="st-t">✗' +
+          (Number(s.trashed) || 0) +
+          "</span>";
       }
 
       function showMessage(text, clickable) {
@@ -547,6 +673,8 @@
             clearMotion(); // it did not move; bring the image back
             return;
           }
+          const data = await res.json();
+          updateStats(data.stats);
           await minAnim; // let the slide-out finish before the next fades in
           await advance(true, true);
         } catch (e) {
@@ -587,6 +715,7 @@
             return;
           }
           const data = await res.json();
+          updateStats(data.stats);
           flash("undo");
           // The restored file is shown immediately (re-enters the queue front),
           // fading up at centre.
@@ -657,6 +786,19 @@
         if (metaOpen && queue.length) loadMeta(queue[0]);
       }
 
+      // ---- help overlay ----
+      let helpOpen = false;
+      function toggleHelp(open) {
+        helpOpen = open == null ? !helpOpen : open;
+        els.help.classList.toggle("show", helpOpen);
+      }
+      els.helpbtn.addEventListener("click", () => {
+        // Drop focus so Enter/Space afterwards do not re-trigger the button.
+        els.helpbtn.blur();
+        toggleHelp();
+      });
+      els.help.addEventListener("click", () => toggleHelp(false));
+
       // A vanished image (write-in-progress race or external delete) is treated
       // as a skip: the next refresh re-surfaces it if it was just being written
       // (design.md §7).
@@ -666,7 +808,17 @@
 
       // ---- keyboard ----
       window.addEventListener("keydown", (e) => {
+        // While the help overlay is up, any key just dismisses it; acting on
+        // an image you cannot see would be an easy misfire.
+        if (helpOpen) {
+          e.preventDefault();
+          toggleHelp(false);
+          return;
+        }
         switch (e.key) {
+          case "?":
+            toggleHelp(true);
+            break;
           case "ArrowRight":
             decide("keep");
             break;
@@ -902,6 +1054,14 @@
           .catch(() => {});
       }
 
+      // Seed today's totals; afterwards every move/undo response refreshes them.
+      function fetchStatsInBackground() {
+        fetch(api("api/stats"))
+          .then((r) => (r.ok ? r.json() : null))
+          .then((d) => updateStats(d))
+          .catch(() => {});
+      }
+
       // Tap/click the centered message to retry after a load failure.
       async function retry() {
         if (busy || queue.length > 0) return;
@@ -912,6 +1072,7 @@
       async function init() {
         render(); // show the scanning message right away, before any await
         fetchCountInBackground();
+        fetchStatsInBackground();
         await bootstrap();
       }
 
