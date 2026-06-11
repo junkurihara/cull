@@ -140,6 +140,15 @@
       #gtitle {
         opacity: 0.85;
       }
+      #gsort {
+        font: inherit;
+        font-size: 12px;
+        background: #111;
+        color: #ccc;
+        border: 1px solid #444;
+        border-radius: 6px;
+        padding: 2px 6px;
+      }
       #gstatus {
         opacity: 0.6;
         font-variant-numeric: tabular-nums;
@@ -485,6 +494,12 @@
       <div id="gbar">
         <button id="gclose" class="barbtn" type="button" aria-label="Close gallery">✕</button>
         <span id="gtitle">keep</span>
+        <select id="gsort" aria-label="Sort order">
+          <option value="mtime:desc">newest first</option>
+          <option value="mtime:asc">oldest first</option>
+          <option value="name:asc">name A→Z</option>
+          <option value="name:desc">name Z→A</option>
+        </select>
         <span id="gstatus"></span>
       </div>
       <div id="ggrid"><div id="gsentinel"></div></div>
@@ -525,7 +540,8 @@
           <tr><td>drag (zoomed)</td><td>pan</td></tr>
           <tr class="sect"><td colspan="2">Keep gallery (▦ / g)</td></tr>
           <tr><td>tap thumbnail</td><td>view full size</td></tr>
-          <tr><td>← / → or swipe</td><td>newer / older</td></tr>
+          <tr><td>← / → or swipe</td><td>navigate</td></tr>
+          <tr><td>s</td><td>cycle sort (date / name)</td></tr>
           <tr><td>swipe ↓ / Esc</td><td>close viewer</td></tr>
           <tr><td>restore</td><td>send back for re-triage</td></tr>
           <tr class="sect"><td colspan="2">Status bar</td></tr>
@@ -563,6 +579,7 @@
         gallery: document.getElementById("gallery"),
         gallerybtn: document.getElementById("gallerybtn"),
         gclose: document.getElementById("gclose"),
+        gsort: document.getElementById("gsort"),
         gstatus: document.getElementById("gstatus"),
         ggrid: document.getElementById("ggrid"),
         gsentinel: document.getElementById("gsentinel"),
@@ -966,8 +983,12 @@
       // The gallery is hash-routed (#keep): reload restores it and the phone
       // back button closes it. All state below is rebuilt on every open.
       const GPAGE = 60;
+      // Sort modes cycled by the `s` key, mirrored in the <select>. mtime
+      // survives the keep rename, so "newest" means newest generated.
+      const GSORTS = ["mtime:desc", "mtime:asc", "name:asc", "name:desc"];
+      let gSort = GSORTS[0];
       let galleryOpen = false;
-      let gItems = []; // loaded keep relpaths, newest first
+      let gItems = []; // loaded {rel, mtime} entries in the current order
       let gCells = new Map(); // relpath -> grid cell element
       let gExhausted = false;
       let gLoading = false;
@@ -985,40 +1006,51 @@
         els.gempty.classList.toggle("show", gExhausted && gItems.length === 0);
       }
 
-      function addGalleryCell(rel) {
+      function addGalleryCell(item) {
         const btn = document.createElement("button");
         btn.className = "gcell";
         btn.type = "button";
         // The relpath is the only meaningful name a generated image has; it
         // gives the button an accessible label for assistive tech.
-        btn.setAttribute("aria-label", "View " + rel);
+        btn.setAttribute("aria-label", "View " + item.rel);
         const im = document.createElement("img");
         im.loading = "lazy";
-        im.alt = rel;
-        im.src = keepThumbUrl(rel);
+        im.alt = item.rel;
+        im.src = keepThumbUrl(item.rel);
         btn.appendChild(im);
-        btn.addEventListener("click", () => openViewer(gItems.indexOf(rel)));
+        btn.addEventListener("click", () =>
+          openViewer(gItems.findIndex((it) => it.rel === item.rel))
+        );
         els.ggrid.insertBefore(btn, els.gsentinel);
-        gCells.set(rel, btn);
+        gCells.set(item.rel, btn);
       }
 
       async function loadMoreGallery() {
         if (gLoading || gExhausted || !galleryOpen) return;
         gLoading = true;
         try {
-          const after = gItems.length
-            ? "&after=" + encodeURIComponent(gItems[gItems.length - 1])
-            : "";
-          const res = await fetch(api("api/keep/list?limit=" + GPAGE + after));
+          const parts = gSort.split(":");
+          let url = "api/keep/list?limit=" + GPAGE + "&sort=" + parts[0] + "&dir=" + parts[1];
+          if (gItems.length) {
+            // The cursor is the compound key of the last loaded item; the
+            // relpath breaks mtime ties so pagination stays stable.
+            const last = gItems[gItems.length - 1];
+            url +=
+              "&after=" +
+              encodeURIComponent(last.rel) +
+              "&after_mtime=" +
+              (last.mtime || 0);
+          }
+          const res = await fetch(api(url));
           if (!res.ok) {
             toast("gallery list failed (" + res.status + ")");
             return;
           }
           const data = await res.json();
           if (data.items.length < GPAGE) gExhausted = true;
-          for (const rel of data.items) {
-            gItems.push(rel);
-            addGalleryCell(rel);
+          for (const item of data.items) {
+            gItems.push(item);
+            addGalleryCell(item);
           }
           updateGStatus();
         } catch (e) {
@@ -1032,10 +1064,30 @@
         gItems = [];
         gExhausted = false;
         gLoading = false;
-        gRestored = 0;
         gCells = new Map();
         for (const cell of els.ggrid.querySelectorAll(".gcell")) cell.remove();
         updateGStatus();
+      }
+
+      function setSort(value) {
+        gSort = value;
+        els.gsort.value = value;
+        closeViewer();
+        resetGallery();
+        loadMoreGallery();
+      }
+      els.gsort.addEventListener("change", () => {
+        // Drop focus so subsequent keys (s/g/Escape) reach the gallery
+        // handler instead of the select's native typeahead.
+        els.gsort.blur();
+        setSort(els.gsort.value);
+      });
+
+      // `s` cycles through the sort modes without reaching for the dropdown.
+      function cycleSort() {
+        const next = GSORTS[(GSORTS.indexOf(gSort) + 1) % GSORTS.length];
+        setSort(next);
+        toast(els.gsort.options[els.gsort.selectedIndex].text);
       }
 
       function syncGalleryToHash() {
@@ -1044,6 +1096,7 @@
         galleryOpen = want;
         els.gallery.classList.toggle("show", want);
         if (want) {
+          gRestored = 0;
           resetGallery();
           loadMoreGallery();
         } else {
@@ -1080,9 +1133,11 @@
       function openViewer(i) {
         if (i < 0 || i >= gItems.length) return;
         gIndex = i;
-        els.gimg.src = keepImageUrl(gItems[i]);
-        els.gimg.alt = gItems[i];
-        els.gname.textContent = gItems[i];
+        const it = gItems[i];
+        els.gimg.src = keepImageUrl(it.rel);
+        els.gimg.alt = it.rel;
+        els.gname.textContent =
+          it.rel + (it.mtime ? " · " + new Date(it.mtime).toLocaleString() : "");
         els.gviewer.classList.add("show");
       }
 
@@ -1123,7 +1178,7 @@
       async function galleryAct(action) {
         if (gBusy || gIndex == null) return;
         const i = gIndex;
-        const rel = gItems[i];
+        const rel = gItems[i].rel;
         gBusy = true;
         try {
           const res = await fetch(api("api/keep/" + action), {
@@ -1216,6 +1271,8 @@
                 closeViewer();
                 break;
             }
+          } else if (e.key === "s" || e.key === "S") {
+            cycleSort();
           } else if (e.key === "Escape" || e.key === "g" || e.key === "G") {
             location.hash = "";
           }

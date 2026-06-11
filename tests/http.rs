@@ -83,6 +83,16 @@ fn json(bytes: &[u8]) -> Value {
     serde_json::from_slice(bytes).unwrap()
 }
 
+/// Extract the relpaths from a keep-list response body.
+fn list_rels(v: &Value) -> Vec<String> {
+    v["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| i["rel"].as_str().unwrap().to_string())
+        .collect()
+}
+
 #[tokio::test]
 async fn count_reports_backlog() {
     let (state, _tmp) = state_with_tree();
@@ -196,17 +206,23 @@ async fn keep_gallery_list_thumb_and_retriage() {
     post_json(&state, "/api/keep", json!({"relpath":"Image_00001_.png"})).await;
     post_json(&state, "/api/keep", json!({"relpath":"Image_00002_.png"})).await;
 
-    // Listing is newest-first (descending relpath) and paginates via `after`.
-    let (status, body) = get(&state, "/api/keep/list").await;
+    // Name sort lists descending relpath and paginates via `after` (the two
+    // fixture files were written at nearly the same instant, so name sort
+    // keeps the order assertions deterministic; mtime sort has its own test).
+    let (status, body) = get(&state, "/api/keep/list?sort=name").await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(
-        json(&body)["items"],
-        json!(["Image_00002_.png", "Image_00001_.png"])
+        list_rels(&json(&body)),
+        vec!["Image_00002_.png", "Image_00001_.png"]
     );
-    let (_, body) = get(&state, "/api/keep/list?limit=1").await;
-    assert_eq!(json(&body)["items"], json!(["Image_00002_.png"]));
-    let (_, body) = get(&state, "/api/keep/list?after=Image_00002_.png&limit=1").await;
-    assert_eq!(json(&body)["items"], json!(["Image_00001_.png"]));
+    let (_, body) = get(&state, "/api/keep/list?sort=name&limit=1").await;
+    assert_eq!(list_rels(&json(&body)), vec!["Image_00002_.png"]);
+    let (_, body) = get(
+        &state,
+        "/api/keep/list?sort=name&after=Image_00002_.png&limit=1",
+    )
+    .await;
+    assert_eq!(list_rels(&json(&body)), vec!["Image_00001_.png"]);
 
     // Full image and thumbnail are served from KEEP_DIR; the thumb is a JPEG.
     let (status, _) = get(&state, "/api/keep/image/Image_00001_.png").await;
@@ -242,6 +258,63 @@ async fn keep_gallery_list_thumb_and_retriage() {
     // The gallery is now empty.
     let (_, body) = get(&state, "/api/keep/list").await;
     assert_eq!(json(&body)["items"].as_array().unwrap().len(), 0);
+}
+
+#[tokio::test]
+async fn keep_list_sorts_by_mtime_and_validates_params() {
+    let (state, tmp) = state_with_tree();
+
+    // Pin distinct mtimes on the source files. rename(2) preserves mtime, so
+    // the values survive the keep moves below. 00001 is made the NEWER file,
+    // the reverse of name order, to prove the sort key is actually the time.
+    let set = |name: &str, secs: u64| {
+        let p = tmp.path().join("output").join(name);
+        let t = std::time::UNIX_EPOCH + std::time::Duration::from_secs(secs);
+        std::fs::File::options()
+            .write(true)
+            .open(p)
+            .unwrap()
+            .set_modified(t)
+            .unwrap();
+    };
+    set("Image_00001_.png", 3_000);
+    set("Image_00002_.png", 1_000);
+    post_json(&state, "/api/keep", json!({"relpath":"Image_00001_.png"})).await;
+    post_json(&state, "/api/keep", json!({"relpath":"Image_00002_.png"})).await;
+
+    // Default: mtime desc (newest first), reversing the name order.
+    let (status, body) = get(&state, "/api/keep/list").await;
+    assert_eq!(status, StatusCode::OK);
+    let v = json(&body);
+    assert_eq!(list_rels(&v), vec!["Image_00001_.png", "Image_00002_.png"]);
+    assert_eq!(v["items"][0]["mtime"], 3_000_000);
+
+    // The compound cursor (after + after_mtime) continues mid-list.
+    let (_, body) = get(&state, "/api/keep/list?limit=1").await;
+    assert_eq!(list_rels(&json(&body)), vec!["Image_00001_.png"]);
+    let (_, body) = get(
+        &state,
+        "/api/keep/list?after=Image_00001_.png&after_mtime=3000000&limit=1",
+    )
+    .await;
+    assert_eq!(list_rels(&json(&body)), vec!["Image_00002_.png"]);
+
+    // Oldest first.
+    let (_, body) = get(&state, "/api/keep/list?dir=asc").await;
+    assert_eq!(
+        list_rels(&json(&body)),
+        vec!["Image_00002_.png", "Image_00001_.png"]
+    );
+
+    // Parameter validation.
+    let (status, _) = get(&state, "/api/keep/list?sort=bogus").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let (status, _) = get(&state, "/api/keep/list?dir=sideways").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    // An mtime-sort cursor without its time component is rejected, not
+    // silently treated as a drained list.
+    let (status, _) = get(&state, "/api/keep/list?after=Image_00001_.png").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
 }
 
 #[tokio::test]

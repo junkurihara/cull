@@ -456,14 +456,36 @@ const KEEP_PAGE_MAX: usize = 200;
 #[derive(Debug, Deserialize)]
 struct KeepListParams {
     after: Option<String>,
+    /// mtime (unix millis) of the `after` item; required with `after` when
+    /// sorting by mtime (the cursor is the compound key).
+    after_mtime: Option<u64>,
     limit: Option<usize>,
+    /// `mtime` (default) or `name`.
+    sort: Option<String>,
+    /// `desc` (default, newest/last first) or `asc`.
+    dir: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct KeepListItem {
+    rel: String,
+    /// File mtime in unix milliseconds (0 if unavailable). For kept files
+    /// mtime survives the rename, so this is effectively generation time.
+    mtime: u64,
 }
 
 #[derive(Debug, Serialize)]
 struct KeepListResponse {
-    /// Relpaths under KEEP_DIR, descending. Fewer than the requested limit
-    /// means the listing is drained.
-    items: Vec<String>,
+    /// Entries under KEEP_DIR in the requested order. Fewer than the
+    /// requested limit means the listing is drained.
+    items: Vec<KeepListItem>,
+}
+
+fn bad_request(message: String) -> ApiError {
+    ApiError {
+        status: StatusCode::BAD_REQUEST,
+        message,
+    }
 }
 
 async fn keep_list(
@@ -475,9 +497,34 @@ async fn keep_list(
         .limit
         .unwrap_or(KEEP_PAGE_DEFAULT)
         .clamp(1, KEEP_PAGE_MAX);
+    let sort = match params.sort.as_deref() {
+        None | Some("mtime") => walk::KeepSort::Mtime,
+        Some("name") => walk::KeepSort::Name,
+        Some(other) => {
+            return Err(bad_request(format!(
+                "sort must be mtime or name: {other:?}"
+            )))
+        }
+    };
+    let desc = match params.dir.as_deref() {
+        None | Some("desc") => true,
+        Some("asc") => false,
+        Some(other) => return Err(bad_request(format!("dir must be asc or desc: {other:?}"))),
+    };
+    // The mtime cursor is a compound key; a missing time component would
+    // silently compare everything against (0, rel) and report a drained list.
+    if sort == walk::KeepSort::Mtime && params.after.is_some() && params.after_mtime.is_none() {
+        return Err(bad_request(
+            "after_mtime is required with after when sorting by mtime".to_string(),
+        ));
+    }
     let items = run_blocking(move || {
+        let after = params
+            .after
+            .as_deref()
+            .map(|rel| (params.after_mtime.unwrap_or(0), rel));
         let started = std::time::Instant::now();
-        let result = walk::list_keep_page(&cfg, params.after.as_deref(), limit);
+        let result = walk::list_keep_page(&cfg, sort, desc, after, limit);
         tracing::info!(
             elapsed_ms = started.elapsed().as_millis() as u64,
             "keep list walk"
@@ -485,6 +532,13 @@ async fn keep_list(
         result.map_err(ApiError::from)
     })
     .await?;
+    let items = items
+        .into_iter()
+        .map(|i| KeepListItem {
+            rel: i.rel,
+            mtime: i.mtime_ms,
+        })
+        .collect();
     Ok(Json(KeepListResponse { items }))
 }
 

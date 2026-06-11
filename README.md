@@ -71,8 +71,10 @@ is empty or the moved file has been reclaimed externally.
 ### Keep gallery
 
 The gallery (`g` or the `▦` button, hash-routed as `#keep` so the phone back
-button closes it) shows everything under `KEEP_DIR` as a thumbnail grid, newest
-first. Tap a thumbnail to view it full size, then **restore** it to the source
+button closes it) shows everything under `KEEP_DIR` as a thumbnail grid. The
+order is switchable (dropdown, or cycle with `s`): by modification time —
+which `rename(2)` preserves, so it equals generation time — newest or oldest
+first, or by name. Tap a thumbnail to view it full size, then **restore** it to the source
 tree for re-triage or demote it to **trash**. Gallery moves adjust the daily
 totals but are not undoable via the main undo stack — the reverse of a restore
 is simply keeping the image again. Thumbnails (~320px JPEG) are generated on
@@ -101,7 +103,7 @@ demand and cached in memory (32 MiB LRU); nothing is written to disk.
 - `POST /api/undo` — undo the last move (409 if not possible)
 - `GET  /api/count` — approximate backlog size
 - `GET  /api/stats` — today's keep/trash totals (also echoed in move/undo responses)
-- `GET  /api/keep/list?after=<relpath>&limit=<n>` — kept images, newest first (page ≤ 200)
+- `GET  /api/keep/list?sort=mtime|name&dir=desc|asc&after=<relpath>&after_mtime=<ms>&limit=<n>` — kept images (default: newest mtime first; page ≤ 200)
 - `GET  /api/keep/image/<relpath>` / `GET /api/keep/thumb/<relpath>` — kept image / 320px JPEG thumb
 - `POST /api/keep/restore` `{ "relpath": ... }` — move back to source for re-triage
 - `POST /api/keep/trash` `{ "relpath": ... }` — move a kept image to trash
