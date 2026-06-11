@@ -3,6 +3,8 @@ name = "cull"
 version = "0.1.0"
 edition = "2021"
 description = "Fullscreen triage tool for a directory of images (keep/trash via rename(2))"
+license = "MIT"
+repository = "https://github.com/junkurihara/cull"
 
 [[bin]]
 name = "cull"

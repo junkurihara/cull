@@ -18,19 +18,113 @@ use axum::{
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
+use std::path::Path as FsPath;
 use std::sync::{Arc, Mutex};
 
 /// Shared application state.
 pub struct AppState {
     pub cfg: Config,
     pub undo: Mutex<UndoStack>,
+    stats: Mutex<Stats>,
 }
 
 impl AppState {
     pub fn new(cfg: Config) -> Self {
         let undo = Mutex::new(UndoStack::new(cfg.undo_depth));
-        AppState { cfg, undo }
+        AppState {
+            cfg,
+            undo,
+            stats: Mutex::new(Stats::default()),
+        }
     }
+
+    /// Record a successful keep/trash and return today's totals.
+    fn record_move(&self, dest: Destination) -> StatsBody {
+        let mut stats = self.stats.lock().expect("stats mutex poisoned");
+        stats.roll(today_index(self.cfg.tz_offset_hours));
+        match dest {
+            Destination::Keep => stats.kept += 1,
+            Destination::Trash => stats.trashed += 1,
+        }
+        stats.body()
+    }
+
+    /// Record a successful undo, classified by which destination the file came
+    /// back from, and return today's totals. Undoing a move made before the
+    /// day rolled over decrements a counter that is already zero; saturating
+    /// arithmetic keeps that harmless edge case from underflowing.
+    fn record_undo(&self, undid_dst: &FsPath) -> StatsBody {
+        let mut stats = self.stats.lock().expect("stats mutex poisoned");
+        stats.roll(today_index(self.cfg.tz_offset_hours));
+        if undid_dst.starts_with(&self.cfg.keep_dir) {
+            stats.kept = stats.kept.saturating_sub(1);
+        } else if undid_dst.starts_with(&self.cfg.trash_dir) {
+            stats.trashed = stats.trashed.saturating_sub(1);
+        }
+        stats.body()
+    }
+
+    /// Today's totals (rolled to the current day first, so a read just after
+    /// midnight reports zeros rather than yesterday's numbers).
+    fn stats_snapshot(&self) -> StatsBody {
+        let mut stats = self.stats.lock().expect("stats mutex poisoned");
+        stats.roll(today_index(self.cfg.tz_offset_hours));
+        stats.body()
+    }
+}
+
+/// Daily triage statistics. In-memory only: lost on restart, which is
+/// acceptable for a "how much did I get through today" affordance. Counters
+/// reset to zero when the (offset-adjusted) day index changes.
+#[derive(Debug, Default)]
+struct Stats {
+    day: i64,
+    kept: u64,
+    trashed: u64,
+}
+
+impl Stats {
+    fn roll(&mut self, day: i64) {
+        if self.day != day {
+            *self = Stats {
+                day,
+                kept: 0,
+                trashed: 0,
+            };
+        }
+    }
+
+    fn body(&self) -> StatsBody {
+        StatsBody {
+            kept: self.kept,
+            trashed: self.trashed,
+        }
+    }
+}
+
+/// Today's totals as exposed over the API (in `/api/stats` and echoed in
+/// every move/undo response so the client never needs an extra round trip).
+#[derive(Debug, Clone, Copy, Serialize)]
+pub struct StatsBody {
+    kept: u64,
+    trashed: u64,
+}
+
+/// Day index (days since the Unix epoch) shifted by the configured UTC offset,
+/// so "today" rolls over at local midnight rather than 00:00 UTC.
+fn today_index(tz_offset_hours: i64) -> i64 {
+    // A clock before the epoch is not a real deployment condition; mapping it
+    // to 0 merely groups such times into one day instead of failing requests.
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    day_of(secs, tz_offset_hours)
+}
+
+/// Pure day-index computation, separated from the clock for testability.
+fn day_of(unix_secs: i64, tz_offset_hours: i64) -> i64 {
+    (unix_secs + tz_offset_hours * 3600).div_euclid(86400)
 }
 
 /// Build the application router.
@@ -39,6 +133,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/", get(index))
         .route("/api/next", get(next))
         .route("/api/count", get(count))
+        .route("/api/stats", get(stats))
         .route("/api/image/{*relpath}", get(image))
         .route("/api/meta/{*relpath}", get(meta_endpoint))
         .route("/api/keep", post(keep))
@@ -110,6 +205,10 @@ async fn count(State(st): State<Arc<AppState>>) -> Result<Json<CountResponse>, A
     Ok(Json(CountResponse { count }))
 }
 
+async fn stats(State(st): State<Arc<AppState>>) -> Json<StatsBody> {
+    Json(st.stats_snapshot())
+}
+
 async fn image(
     State(st): State<Arc<AppState>>,
     Path(relpath): Path<String>,
@@ -153,6 +252,8 @@ struct MoveResponse {
     relpath: String,
     /// Whether an undo is now available.
     can_undo: bool,
+    /// Today's totals after this move.
+    stats: StatsBody,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -182,21 +283,25 @@ async fn move_to(
 ) -> Result<Json<MoveResponse>, ApiError> {
     let relpath = body.relpath;
     let echo = relpath.clone();
-    let can_undo = run_blocking(move || {
+    let (can_undo, stats) = run_blocking(move || {
         let source_abs = paths::validate_relpath(&st.cfg, &relpath)?;
         let dst_base = match dest {
             Destination::Keep => &st.cfg.keep_dir,
             Destination::Trash => &st.cfg.trash_dir,
         };
         let entry = moves::perform_move(dst_base, &source_abs, &relpath).map_err(ApiError::from)?;
-        let mut stack = st.undo.lock().expect("undo mutex poisoned");
-        stack.push(entry);
-        Ok(!stack.is_empty())
+        let can_undo = {
+            let mut stack = st.undo.lock().expect("undo mutex poisoned");
+            stack.push(entry);
+            !stack.is_empty()
+        };
+        Ok((can_undo, st.record_move(dest)))
     })
     .await?;
     Ok(Json(MoveResponse {
         relpath: echo,
         can_undo,
+        stats,
     }))
 }
 
@@ -204,16 +309,26 @@ async fn move_to(
 struct UndoResponse {
     relpath: String,
     can_undo: bool,
+    /// Today's totals after this undo.
+    stats: StatsBody,
 }
 
 async fn undo(State(st): State<Arc<AppState>>) -> Result<Json<UndoResponse>, ApiError> {
-    let (relpath, can_undo) = run_blocking(move || {
-        let mut stack = st.undo.lock().expect("undo mutex poisoned");
-        let relpath = moves::undo(&st.cfg.source_dir, &mut stack).map_err(ApiError::from)?;
-        Ok((relpath, !stack.is_empty()))
+    let (relpath, can_undo, stats) = run_blocking(move || {
+        let (undone, can_undo) = {
+            let mut stack = st.undo.lock().expect("undo mutex poisoned");
+            let undone = moves::undo(&st.cfg.source_dir, &mut stack).map_err(ApiError::from)?;
+            (undone, !stack.is_empty())
+        };
+        let stats = st.record_undo(&undone.undid_dst);
+        Ok((undone.restored_rel, can_undo, stats))
     })
     .await?;
-    Ok(Json(UndoResponse { relpath, can_undo }))
+    Ok(Json(UndoResponse {
+        relpath,
+        can_undo,
+        stats,
+    }))
 }
 
 /// Run filesystem work on the blocking pool, mapping a join failure to 500.
@@ -300,5 +415,36 @@ impl From<moves::UndoError> for ApiError {
 impl From<std::io::Error> for ApiError {
     fn from(e: std::io::Error) -> Self {
         ApiError::internal(e.to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stats_roll_resets_counters_only_on_day_change() {
+        let mut s = Stats {
+            day: 1,
+            kept: 3,
+            trashed: 4,
+        };
+        s.roll(1);
+        assert_eq!((s.kept, s.trashed), (3, 4));
+        s.roll(2);
+        assert_eq!((s.day, s.kept, s.trashed), (2, 0, 0));
+    }
+
+    #[test]
+    fn day_of_rolls_at_offset_midnight() {
+        assert_eq!(day_of(0, 0), 0);
+        assert_eq!(day_of(86_399, 0), 0);
+        assert_eq!(day_of(86_400, 0), 1);
+        // With +9 (JST) the day flips 9 hours earlier in UTC terms.
+        assert_eq!(day_of(86_400 - 9 * 3600, 9), 1);
+        assert_eq!(day_of(86_400 - 9 * 3600 - 1, 9), 0);
+        // Negative offsets shift the boundary the other way (euclidean
+        // division keeps pre-boundary times on the previous day).
+        assert_eq!(day_of(3_600, -2), -1);
     }
 }

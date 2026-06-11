@@ -24,6 +24,7 @@ pub const DEFAULT_ORDER: Order = Order::Asc;
 pub const DEFAULT_EXTENSIONS: &str = "png,jpg,jpeg,webp";
 pub const DEFAULT_UNDO_DEPTH: usize = 50;
 pub const DEFAULT_BIND_ADDR: &str = "0.0.0.0:8080";
+pub const DEFAULT_TZ_OFFSET_HOURS: i64 = 0;
 
 /// Configuration errors. A dedicated enum (rather than swallowing into a
 /// string) so callers can distinguish causes if needed.
@@ -33,6 +34,7 @@ pub enum ConfigError {
     EmptyExtensions,
     InvalidUndoDepth(String),
     InvalidBindAddr(String),
+    InvalidTzOffset(String),
 }
 
 impl fmt::Display for ConfigError {
@@ -49,6 +51,12 @@ impl fmt::Display for ConfigError {
             }
             ConfigError::InvalidBindAddr(v) => {
                 write!(f, "BIND_ADDR is not a valid socket address: {v:?}")
+            }
+            ConfigError::InvalidTzOffset(v) => {
+                write!(
+                    f,
+                    "TZ_OFFSET_HOURS must be an integer between -26 and 26, got {v:?}"
+                )
             }
         }
     }
@@ -68,6 +76,9 @@ pub struct RawConfig {
     pub extensions: BTreeSet<String>,
     pub undo_depth: usize,
     pub bind_addr: SocketAddr,
+    /// UTC offset (whole hours) used only to decide where "today" begins for
+    /// the daily triage statistics. Not a full timezone: no DST handling.
+    pub tz_offset_hours: i64,
 }
 
 /// Fully resolved configuration: directories exist and are canonicalized
@@ -82,6 +93,7 @@ pub struct Config {
     pub extensions: BTreeSet<String>,
     pub undo_depth: usize,
     pub bind_addr: SocketAddr,
+    pub tz_offset_hours: i64,
 }
 
 fn parse_order(s: &str) -> Result<Order, ConfigError> {
@@ -162,6 +174,18 @@ impl RawConfig {
             .parse::<SocketAddr>()
             .map_err(|_| ConfigError::InvalidBindAddr(bind_raw.clone()))?;
 
+        // Real-world UTC offsets span -12..+14; allow a little slack but
+        // reject obvious typos (e.g. minutes passed as hours).
+        let tz_offset_hours = match get("TZ_OFFSET_HOURS").filter(|s| !s.is_empty()) {
+            Some(v) => v
+                .trim()
+                .parse::<i64>()
+                .ok()
+                .filter(|h| h.abs() <= 26)
+                .ok_or_else(|| ConfigError::InvalidTzOffset(v.clone()))?,
+            None => DEFAULT_TZ_OFFSET_HOURS,
+        };
+
         Ok(RawConfig {
             source_dir,
             keep_dir,
@@ -170,6 +194,7 @@ impl RawConfig {
             extensions,
             undo_depth,
             bind_addr,
+            tz_offset_hours,
         })
     }
 
@@ -192,6 +217,7 @@ impl RawConfig {
             extensions: self.extensions,
             undo_depth: self.undo_depth,
             bind_addr: self.bind_addr,
+            tz_offset_hours: self.tz_offset_hours,
         })
     }
 }
@@ -306,6 +332,34 @@ mod tests {
                 .undo_depth,
             10
         );
+    }
+
+    #[test]
+    fn tz_offset_parsed_and_bounded() {
+        assert_eq!(
+            RawConfig::load(getter(&[])).unwrap().tz_offset_hours,
+            DEFAULT_TZ_OFFSET_HOURS
+        );
+        assert_eq!(
+            RawConfig::load(getter(&[("TZ_OFFSET_HOURS", "9")]))
+                .unwrap()
+                .tz_offset_hours,
+            9
+        );
+        assert_eq!(
+            RawConfig::load(getter(&[("TZ_OFFSET_HOURS", "-5")]))
+                .unwrap()
+                .tz_offset_hours,
+            -5
+        );
+        assert!(matches!(
+            RawConfig::load(getter(&[("TZ_OFFSET_HOURS", "540")])).unwrap_err(),
+            ConfigError::InvalidTzOffset(_)
+        ));
+        assert!(matches!(
+            RawConfig::load(getter(&[("TZ_OFFSET_HOURS", "jst")])).unwrap_err(),
+            ConfigError::InvalidTzOffset(_)
+        ));
     }
 
     #[test]

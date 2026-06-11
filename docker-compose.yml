@@ -30,6 +30,8 @@ services:
       ORDER: asc
       # EXTENSIONS: png,jpg,jpeg,webp
       # UNDO_DEPTH: "50"
+      # UTC offset (whole hours) for the daily-stats day boundary, e.g. 9 = JST.
+      TZ_OFFSET_HOURS: "${TZ_OFFSET_HOURS:-0}"
       RUST_LOG: info
 
     # Mount the image directory read-write (move needs to write keep/trash).
