@@ -189,6 +189,123 @@ async fn stats_track_moves_and_undo() {
 }
 
 #[tokio::test]
+async fn keep_gallery_list_thumb_and_retriage() {
+    let (state, _tmp) = state_with_tree();
+
+    // Move both images into keep.
+    post_json(&state, "/api/keep", json!({"relpath":"Image_00001_.png"})).await;
+    post_json(&state, "/api/keep", json!({"relpath":"Image_00002_.png"})).await;
+
+    // Listing is newest-first (descending relpath) and paginates via `after`.
+    let (status, body) = get(&state, "/api/keep/list").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        json(&body)["items"],
+        json!(["Image_00002_.png", "Image_00001_.png"])
+    );
+    let (_, body) = get(&state, "/api/keep/list?limit=1").await;
+    assert_eq!(json(&body)["items"], json!(["Image_00002_.png"]));
+    let (_, body) = get(&state, "/api/keep/list?after=Image_00002_.png&limit=1").await;
+    assert_eq!(json(&body)["items"], json!(["Image_00001_.png"]));
+
+    // Full image and thumbnail are served from KEEP_DIR; the thumb is a JPEG.
+    let (status, _) = get(&state, "/api/keep/image/Image_00001_.png").await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, bytes) = get(&state, "/api/keep/thumb/Image_00001_.png").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(&bytes[..2], &[0xFF, 0xD8], "thumb must be JPEG");
+
+    // Restore returns the file to the source tree: backlog +1, kept -1.
+    let (status, body) = post_json(
+        &state,
+        "/api/keep/restore",
+        json!({"relpath":"Image_00001_.png"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["relpath"], "Image_00001_.png");
+    assert_eq!(body["stats"]["kept"], 1);
+    let (_, body) = get(&state, "/api/count").await;
+    assert_eq!(json(&body)["count"], 1);
+
+    // Demoting a keep straight to trash flips both counters.
+    let (status, body) = post_json(
+        &state,
+        "/api/keep/trash",
+        json!({"relpath":"Image_00002_.png"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["stats"]["kept"], 0);
+    assert_eq!(body["stats"]["trashed"], 1);
+
+    // The gallery is now empty.
+    let (_, body) = get(&state, "/api/keep/list").await;
+    assert_eq!(json(&body)["items"].as_array().unwrap().len(), 0);
+}
+
+#[tokio::test]
+async fn keep_thumb_revalidates_via_etag() {
+    let (state, _tmp) = state_with_tree();
+    post_json(&state, "/api/keep", json!({"relpath":"Image_00001_.png"})).await;
+
+    // First fetch: 200 with a file-identity ETag and a revalidation policy.
+    let resp = router(state.clone())
+        .oneshot(
+            Request::builder()
+                .uri("/api/keep/thumb/Image_00001_.png")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(
+        resp.headers()
+            .get("cache-control")
+            .and_then(|v| v.to_str().ok()),
+        Some("private, no-cache")
+    );
+    let etag = resp
+        .headers()
+        .get("etag")
+        .and_then(|v| v.to_str().ok())
+        .expect("thumb response must carry an ETag")
+        .to_string();
+
+    // Conditional re-fetch with the same identity: 304, empty body.
+    let resp = router(state.clone())
+        .oneshot(
+            Request::builder()
+                .uri("/api/keep/thumb/Image_00001_.png")
+                .header("if-none-match", &etag)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_MODIFIED);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    assert!(bytes.is_empty());
+}
+
+#[tokio::test]
+async fn keep_gallery_rejects_traversal_and_missing() {
+    let (state, _tmp) = state_with_tree();
+    let (status, _) = post_json(
+        &state,
+        "/api/keep/restore",
+        json!({"relpath":"../escape.png"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let (status, _) = get(&state, "/api/keep/thumb/missing.png").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
 async fn undo_empty_is_409() {
     let (state, _tmp) = state_with_tree();
     let (status, _) = post_json(&state, "/api/undo", json!({})).await;

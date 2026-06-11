@@ -14,6 +14,8 @@
 
 use crate::config::{Config, Order};
 use crate::paths::is_under;
+use std::cmp::Reverse;
+use std::collections::BinaryHeap;
 use std::io::{self, ErrorKind};
 use std::path::Path;
 
@@ -73,14 +75,56 @@ fn has_allowed_ext(cfg: &Config, name: &str) -> bool {
     }
 }
 
+/// List one page of the keep gallery: up to `limit` relative paths under
+/// KEEP_DIR that are strictly less than `after` (when given), in descending
+/// byte-lexicographic order — the gallery reviews the newest keeps first,
+/// independent of the triage ORDER. Single O(n) pass with O(limit) extra
+/// space: a min-heap keeps the `limit` largest survivors (design.md addendum).
+pub fn list_keep_page(cfg: &Config, after: Option<&str>, limit: usize) -> io::Result<Vec<String>> {
+    let mut heap: BinaryHeap<Reverse<String>> = BinaryHeap::with_capacity(limit + 1);
+    walk_dir(cfg, &cfg.keep_dir, "", &[], &mut |rel: &str| {
+        if let Some(a) = after {
+            if rel >= a {
+                return;
+            }
+        }
+        if heap.len() < limit {
+            heap.push(Reverse(rel.to_string()));
+        } else if let Some(Reverse(smallest)) = heap.peek() {
+            if rel > smallest.as_str() {
+                heap.pop();
+                heap.push(Reverse(rel.to_string()));
+            }
+        }
+    })?;
+    let mut items: Vec<String> = heap.into_iter().map(|Reverse(s)| s).collect();
+    items.sort_unstable_by(|a, b| b.cmp(a));
+    Ok(items)
+}
+
 /// Walk every eligible image in the source tree, invoking `f` with each
 /// relative path. Pruning, hidden-file exclusion and the extension filter are
 /// applied here so callers see only candidate images.
 fn walk_images(cfg: &Config, f: &mut dyn FnMut(&str)) -> io::Result<()> {
-    walk_dir(cfg, &cfg.source_dir, "", f)
+    walk_dir(
+        cfg,
+        &cfg.source_dir,
+        "",
+        &[&cfg.keep_dir, &cfg.trash_dir],
+        f,
+    )
 }
 
-fn walk_dir(cfg: &Config, dir: &Path, rel: &str, f: &mut dyn FnMut(&str)) -> io::Result<()> {
+/// Recursive walker shared by the source enumeration and the keep gallery:
+/// `dir` is the current directory, `rel` its path relative to the walk root,
+/// and `prune` the canonical subtrees to skip (empty for the keep walk).
+fn walk_dir(
+    cfg: &Config,
+    dir: &Path,
+    rel: &str,
+    prune: &[&Path],
+    f: &mut dyn FnMut(&str),
+) -> io::Result<()> {
     let read = match std::fs::read_dir(dir) {
         Ok(rd) => rd,
         // A directory removed mid-walk (external move/delete, or our own move
@@ -124,13 +168,13 @@ fn walk_dir(cfg: &Config, dir: &Path, rel: &str, f: &mut dyn FnMut(&str)) -> io:
         };
 
         if file_type.is_dir() {
-            // Prune the keep/trash subtrees by canonical path containment, not
-            // by basename: a user-made subfolder also named "keep" elsewhere
-            // under output must still be walked (design.md §2).
-            if is_under(&abs, &cfg.keep_dir) || is_under(&abs, &cfg.trash_dir) {
+            // Prune by canonical path containment, not by basename: a
+            // user-made subfolder also named "keep" elsewhere under output
+            // must still be walked (design.md §2).
+            if prune.iter().any(|p| is_under(&abs, p)) {
                 continue;
             }
-            walk_dir(cfg, &abs, &child_rel, f)?;
+            walk_dir(cfg, &abs, &child_rel, prune, f)?;
         } else if file_type.is_file() && has_allowed_ext(cfg, name) {
             f(&child_rel);
         }
@@ -245,6 +289,38 @@ mod tests {
             find_next(&cfg, None).unwrap().as_deref(),
             Some("proj-a/keep/inside.png")
         );
+    }
+
+    #[test]
+    fn keep_page_lists_descending_with_after_chaining() {
+        let (cfg, _tmp) = setup();
+        // Populate KEEP_DIR beyond the single fixture file, including a
+        // subfolder, a hidden file and a non-image (both excluded).
+        let write = |rel: &str| {
+            let p = cfg.keep_dir.join(rel);
+            fs::create_dir_all(p.parent().unwrap()).unwrap();
+            fs::write(p, b"x").unwrap();
+        };
+        write("a.png");
+        write("sub/b.png");
+        write(".hidden.png");
+        write("notes.txt");
+        // setup() already wrote keep/kept.png -> relpath "kept.png".
+
+        // Full listing, newest (largest relpath) first.
+        let all = list_keep_page(&cfg, None, 100).unwrap();
+        assert_eq!(all, vec!["sub/b.png", "kept.png", "a.png"]);
+
+        // Bounded pages chain via `after` and drain cleanly.
+        let p1 = list_keep_page(&cfg, None, 2).unwrap();
+        assert_eq!(p1, vec!["sub/b.png", "kept.png"]);
+        let p2 = list_keep_page(&cfg, Some("kept.png"), 2).unwrap();
+        assert_eq!(p2, vec!["a.png"]);
+        let p3 = list_keep_page(&cfg, Some("a.png"), 2).unwrap();
+        assert!(p3.is_empty());
+
+        // A zero limit returns nothing rather than panicking.
+        assert!(list_keep_page(&cfg, None, 0).unwrap().is_empty());
     }
 
     #[test]

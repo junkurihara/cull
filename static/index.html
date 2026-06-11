@@ -100,9 +100,9 @@
           display: none;
         }
       }
-      /* The bar ignores pointer events so taps reach the stage; the help
-         button opts back in. */
-      #helpbtn {
+      /* The bar ignores pointer events so taps reach the stage; its buttons
+         (help, gallery) opt back in. */
+      .barbtn {
         pointer-events: auto;
         flex: none;
         width: 22px;
@@ -116,6 +116,132 @@
         line-height: 1;
         cursor: pointer;
         padding: 0;
+      }
+      /* Keep gallery: a fullscreen grid layer above the triage stage. */
+      #gallery {
+        position: fixed;
+        inset: 0;
+        display: none;
+        flex-direction: column;
+        background: #000;
+        z-index: 7;
+      }
+      #gallery.show {
+        display: flex;
+      }
+      #gbar {
+        display: flex;
+        gap: 12px;
+        align-items: center;
+        padding: 6px 10px;
+        font-size: 13px;
+        border-bottom: 1px solid #222;
+      }
+      #gtitle {
+        opacity: 0.85;
+      }
+      #gstatus {
+        opacity: 0.6;
+        font-variant-numeric: tabular-nums;
+      }
+      #ggrid {
+        flex: 1;
+        overflow-y: auto;
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+        gap: 4px;
+        padding: 4px;
+        align-content: start;
+      }
+      .gcell {
+        padding: 0;
+        border: 0;
+        background: #111;
+        aspect-ratio: 1;
+        cursor: pointer;
+      }
+      .gcell img {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        display: block;
+      }
+      #gsentinel {
+        height: 1px;
+        grid-column: 1 / -1;
+      }
+      #gempty {
+        position: absolute;
+        inset: 0;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        opacity: 0.6;
+        pointer-events: none;
+      }
+      #gempty.show {
+        display: flex;
+      }
+      /* Gallery viewer: one kept image fullscreen with re-triage actions. */
+      #gviewer {
+        position: fixed;
+        inset: 0;
+        display: none;
+        background: rgba(0, 0, 0, 0.96);
+        z-index: 8;
+      }
+      #gviewer.show {
+        display: block;
+      }
+      #gimg {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        object-fit: contain;
+        user-select: none;
+        -webkit-user-drag: none;
+      }
+      #gname {
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        padding: 6px 10px;
+        font-size: 12px;
+        opacity: 0.7;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        background: linear-gradient(rgba(0, 0, 0, 0.6), rgba(0, 0, 0, 0));
+        pointer-events: none;
+      }
+      #gactions {
+        position: absolute;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        display: flex;
+        gap: 8px;
+        justify-content: center;
+        padding: 10px 10px calc(10px + env(safe-area-inset-bottom));
+        background: linear-gradient(rgba(0, 0, 0, 0), rgba(0, 0, 0, 0.6));
+      }
+      .gact {
+        font: inherit;
+        font-size: 14px;
+        color: #eee;
+        background: rgba(25, 25, 25, 0.9);
+        border: 1px solid #444;
+        border-radius: 8px;
+        padding: 10px 18px;
+        cursor: pointer;
+      }
+      #grestore {
+        border-color: #2e7d32;
+      }
+      #gtrashbtn {
+        border-color: #c62828;
       }
       /* Help overlay */
       #help {
@@ -180,6 +306,7 @@
       /* Transient toast (e.g. undo failed) */
       #toast {
         position: fixed;
+        z-index: 12; /* above the gallery and help layers */
         bottom: 24px;
         left: 50%;
         transform: translateX(-50%);
@@ -350,8 +477,27 @@
       <span id="count">…</span>
       <span id="stats"><span class="st-k"></span> <span class="st-t"></span></span>
       <span id="relpath"></span>
-      <span id="hints">→ keep · ← trash · ↓ skip · ⌫ undo · i meta · ? help</span>
-      <button id="helpbtn" type="button" aria-label="Help">?</button>
+      <span id="hints">→ keep · ← trash · ↓ skip · ⌫ undo · i meta · g gallery · ? help</span>
+      <button id="gallerybtn" class="barbtn" type="button" aria-label="Keep gallery">▦</button>
+      <button id="helpbtn" class="barbtn" type="button" aria-label="Help">?</button>
+    </div>
+    <div id="gallery">
+      <div id="gbar">
+        <button id="gclose" class="barbtn" type="button" aria-label="Close gallery">✕</button>
+        <span id="gtitle">keep</span>
+        <span id="gstatus"></span>
+      </div>
+      <div id="ggrid"><div id="gsentinel"></div></div>
+      <div id="gempty">No kept images</div>
+    </div>
+    <div id="gviewer">
+      <img id="gimg" alt="" />
+      <div id="gname"></div>
+      <div id="gactions">
+        <button id="grestore" class="gact" type="button">↩ restore</button>
+        <button id="gtrashbtn" class="gact" type="button">✗ trash</button>
+        <button id="gclosev" class="gact" type="button">✕ close</button>
+      </div>
     </div>
     <div id="message">Loading…</div>
     <div id="help">
@@ -364,6 +510,7 @@
           <tr><td>⌫</td><td>undo</td></tr>
           <tr><td>i</td><td>metadata panel</td></tr>
           <tr><td>+ / − / 0</td><td>zoom in / out / reset</td></tr>
+          <tr><td>g</td><td>keep gallery</td></tr>
           <tr><td>?</td><td>this help</td></tr>
           <tr class="sect"><td colspan="2">Touch</td></tr>
           <tr><td>swipe →</td><td>keep</td></tr>
@@ -376,6 +523,11 @@
           <tr class="sect"><td colspan="2">Mouse</td></tr>
           <tr><td>wheel</td><td>zoom toward cursor</td></tr>
           <tr><td>drag (zoomed)</td><td>pan</td></tr>
+          <tr class="sect"><td colspan="2">Keep gallery (▦ / g)</td></tr>
+          <tr><td>tap thumbnail</td><td>view full size</td></tr>
+          <tr><td>← / → or swipe</td><td>newer / older</td></tr>
+          <tr><td>swipe ↓ / Esc</td><td>close viewer</td></tr>
+          <tr><td>restore</td><td>send back for re-triage</td></tr>
           <tr class="sect"><td colspan="2">Status bar</td></tr>
           <tr><td>✓ / ✗</td><td>kept / trashed today (all devices)</td></tr>
         </table>
@@ -408,6 +560,19 @@
         badge: document.getElementById("badge"),
         help: document.getElementById("help"),
         helpbtn: document.getElementById("helpbtn"),
+        gallery: document.getElementById("gallery"),
+        gallerybtn: document.getElementById("gallerybtn"),
+        gclose: document.getElementById("gclose"),
+        gstatus: document.getElementById("gstatus"),
+        ggrid: document.getElementById("ggrid"),
+        gsentinel: document.getElementById("gsentinel"),
+        gempty: document.getElementById("gempty"),
+        gviewer: document.getElementById("gviewer"),
+        gimg: document.getElementById("gimg"),
+        gname: document.getElementById("gname"),
+        grestore: document.getElementById("grestore"),
+        gtrashbtn: document.getElementById("gtrashbtn"),
+        gclosev: document.getElementById("gclosev"),
       };
 
       // Directional feedback for an action: an edge glow plus a center badge.
@@ -797,6 +962,230 @@
       });
       els.help.addEventListener("click", () => toggleHelp(false));
 
+      // ---- keep gallery ----
+      // The gallery is hash-routed (#keep): reload restores it and the phone
+      // back button closes it. All state below is rebuilt on every open.
+      const GPAGE = 60;
+      let galleryOpen = false;
+      let gItems = []; // loaded keep relpaths, newest first
+      let gCells = new Map(); // relpath -> grid cell element
+      let gExhausted = false;
+      let gLoading = false;
+      let gIndex = null; // viewer position in gItems, or null when closed
+      let gBusy = false;
+      let gRestored = 0; // restores this visit -> main queue refresh on close
+
+      const keepThumbUrl = (rel) => api("api/keep/thumb/" + encodeRel(rel));
+      const keepImageUrl = (rel) => api("api/keep/image/" + encodeRel(rel));
+
+      function updateGStatus() {
+        els.gstatus.textContent = gItems.length
+          ? gItems.length + (gExhausted ? "" : "+") + " kept"
+          : "";
+        els.gempty.classList.toggle("show", gExhausted && gItems.length === 0);
+      }
+
+      function addGalleryCell(rel) {
+        const btn = document.createElement("button");
+        btn.className = "gcell";
+        btn.type = "button";
+        // The relpath is the only meaningful name a generated image has; it
+        // gives the button an accessible label for assistive tech.
+        btn.setAttribute("aria-label", "View " + rel);
+        const im = document.createElement("img");
+        im.loading = "lazy";
+        im.alt = rel;
+        im.src = keepThumbUrl(rel);
+        btn.appendChild(im);
+        btn.addEventListener("click", () => openViewer(gItems.indexOf(rel)));
+        els.ggrid.insertBefore(btn, els.gsentinel);
+        gCells.set(rel, btn);
+      }
+
+      async function loadMoreGallery() {
+        if (gLoading || gExhausted || !galleryOpen) return;
+        gLoading = true;
+        try {
+          const after = gItems.length
+            ? "&after=" + encodeURIComponent(gItems[gItems.length - 1])
+            : "";
+          const res = await fetch(api("api/keep/list?limit=" + GPAGE + after));
+          if (!res.ok) {
+            toast("gallery list failed (" + res.status + ")");
+            return;
+          }
+          const data = await res.json();
+          if (data.items.length < GPAGE) gExhausted = true;
+          for (const rel of data.items) {
+            gItems.push(rel);
+            addGalleryCell(rel);
+          }
+          updateGStatus();
+        } catch (e) {
+          toast("gallery list failed");
+        } finally {
+          gLoading = false;
+        }
+      }
+
+      function resetGallery() {
+        gItems = [];
+        gExhausted = false;
+        gLoading = false;
+        gRestored = 0;
+        gCells = new Map();
+        for (const cell of els.ggrid.querySelectorAll(".gcell")) cell.remove();
+        updateGStatus();
+      }
+
+      function syncGalleryToHash() {
+        const want = location.hash === "#keep";
+        if (want === galleryOpen) return;
+        galleryOpen = want;
+        els.gallery.classList.toggle("show", want);
+        if (want) {
+          resetGallery();
+          loadMoreGallery();
+        } else {
+          closeViewer();
+          // Restored files re-enter the source tree at arbitrary positions;
+          // only a fresh walk can surface them, so rebuild the main queue.
+          if (gRestored > 0) {
+            gRestored = 0;
+            queue = [];
+            exhausted = false;
+            tailAfter = null;
+            bootstrap();
+          }
+        }
+      }
+      window.addEventListener("hashchange", syncGalleryToHash);
+      els.gallerybtn.addEventListener("click", () => {
+        els.gallerybtn.blur();
+        location.hash = "keep";
+      });
+      els.gclose.addEventListener("click", () => {
+        location.hash = "";
+      });
+
+      // Load the next page when the grid scrolls near its end.
+      new IntersectionObserver(
+        (entries) => {
+          if (entries.some((en) => en.isIntersecting)) loadMoreGallery();
+        },
+        { root: els.ggrid, rootMargin: "400px" }
+      ).observe(els.gsentinel);
+
+      // ---- gallery viewer ----
+      function openViewer(i) {
+        if (i < 0 || i >= gItems.length) return;
+        gIndex = i;
+        els.gimg.src = keepImageUrl(gItems[i]);
+        els.gimg.alt = gItems[i];
+        els.gname.textContent = gItems[i];
+        els.gviewer.classList.add("show");
+      }
+
+      function closeViewer() {
+        gIndex = null;
+        els.gviewer.classList.remove("show");
+        els.gimg.removeAttribute("src");
+      }
+
+      function viewerNav(delta) {
+        if (gIndex == null) return;
+        const n = gIndex + delta;
+        if (n >= 0 && n < gItems.length) openViewer(n);
+        // Approaching the loaded tail: pull the next page in early.
+        if (!gExhausted && gItems.length - n < 5) loadMoreGallery();
+      }
+
+      function removeGalleryItem(i, rel) {
+        gItems.splice(i, 1);
+        const cell = gCells.get(rel);
+        if (cell) {
+          cell.remove();
+          gCells.delete(rel);
+        }
+        updateGStatus();
+        if (gItems.length === 0) {
+          closeViewer();
+          loadMoreGallery(); // there may be more pages beyond the removed ones
+        } else if (gIndex != null) {
+          openViewer(Math.min(i, gItems.length - 1));
+        }
+        if (!gExhausted && gItems.length < GPAGE / 2) loadMoreGallery();
+      }
+
+      // Re-triage from the gallery: "restore" sends the file back to the
+      // source for the main flow; "trash" demotes it. Neither is undoable via
+      // the main undo stack (the reverse of a restore is just a keep).
+      async function galleryAct(action) {
+        if (gBusy || gIndex == null) return;
+        const i = gIndex;
+        const rel = gItems[i];
+        gBusy = true;
+        try {
+          const res = await fetch(api("api/keep/" + action), {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ relpath: rel }),
+          });
+          if (!res.ok) {
+            toast(action + " failed (" + res.status + ")");
+            return;
+          }
+          const data = await res.json();
+          updateStats(data.stats);
+          if (action === "restore") {
+            gRestored++;
+            if (backlog != null) {
+              backlog++;
+              updateCount();
+            }
+          }
+          toast(action === "restore" ? "Restored for re-triage" : "Moved to trash");
+          removeGalleryItem(i, rel);
+        } catch (e) {
+          toast(action + " failed");
+        } finally {
+          gBusy = false;
+        }
+      }
+
+      els.grestore.addEventListener("click", () => galleryAct("restore"));
+      els.gtrashbtn.addEventListener("click", () => galleryAct("trash"));
+      els.gclosev.addEventListener("click", closeViewer);
+
+      // Viewer touch: horizontal swipe = prev/next, downward swipe = close.
+      let gTouch = null;
+      els.gviewer.addEventListener(
+        "touchstart",
+        (e) => {
+          if (e.touches.length === 1) {
+            gTouch = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+          }
+        },
+        { passive: true }
+      );
+      els.gviewer.addEventListener(
+        "touchend",
+        (e) => {
+          if (!gTouch) return;
+          const t = e.changedTouches[0];
+          const dx = t.clientX - gTouch.x;
+          const dy = t.clientY - gTouch.y;
+          gTouch = null;
+          if (Math.abs(dx) < SWIPE_MIN && Math.abs(dy) < SWIPE_MIN) return; // tap: buttons handle it
+          if (Math.abs(dx) > Math.abs(dy)) {
+            viewerNav(dx < 0 ? 1 : -1); // swipe left -> older, right -> newer
+          } else if (dy > 0) {
+            closeViewer();
+          }
+        },
+        { passive: true }
+      );
+
       // A vanished image (write-in-progress race or external delete) is treated
       // as a skip: the next refresh re-surfaces it if it was just being written
       // (design.md §7).
@@ -813,9 +1202,32 @@
           toggleHelp(false);
           return;
         }
+        // Gallery mode swallows the triage keys; only navigation applies.
+        if (galleryOpen) {
+          if (gIndex != null) {
+            switch (e.key) {
+              case "ArrowRight":
+                viewerNav(1); // older
+                break;
+              case "ArrowLeft":
+                viewerNav(-1); // newer
+                break;
+              case "Escape":
+                closeViewer();
+                break;
+            }
+          } else if (e.key === "Escape" || e.key === "g" || e.key === "G") {
+            location.hash = "";
+          }
+          return;
+        }
         switch (e.key) {
           case "?":
             toggleHelp(true);
+            break;
+          case "g":
+          case "G":
+            location.hash = "keep";
             break;
           case "ArrowRight":
             decide("keep");
@@ -1071,6 +1483,7 @@
         render(); // show the scanning message right away, before any await
         fetchCountInBackground();
         fetchStatsInBackground();
+        syncGalleryToHash(); // a reload on #keep reopens the gallery
         await bootstrap();
       }
 
