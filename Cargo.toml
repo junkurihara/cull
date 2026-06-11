@@ -20,6 +20,9 @@ tokio = { version = "1.52.3", features = ["rt-multi-thread", "macros", "net", "s
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
 png = "0.18.1"
+# Thumbnail generation for the keep gallery. Features are narrowed to the
+# decoders we enumerate (png/jpg/webp) plus the jpeg encoder for output.
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "webp"] }
 mime_guess = "2.0.5"
 tower-http = { version = "0.6.11", features = ["trace"] }
 tracing = "0.1.44"

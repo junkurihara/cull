@@ -59,6 +59,18 @@ pub fn is_under(path: &Path, base: &Path) -> bool {
 /// computed separately in the move layer (it does not exist yet, so it cannot
 /// be canonicalized here).
 pub fn validate_relpath(cfg: &Config, rel: &str) -> Result<PathBuf, PathError> {
+    validate_relpath_under(&cfg.source_dir, rel, &[&cfg.keep_dir, &cfg.trash_dir])
+}
+
+/// Validate a client-supplied relative path against an arbitrary canonical
+/// `base` directory (the keep gallery validates against KEEP_DIR). The
+/// resolved path must exist, stay inside `base` after symlink resolution, and
+/// avoid every `forbidden` subtree.
+pub fn validate_relpath_under(
+    base: &Path,
+    rel: &str,
+    forbidden: &[&Path],
+) -> Result<PathBuf, PathError> {
     if rel.is_empty() {
         return Err(PathError::Empty);
     }
@@ -74,15 +86,15 @@ pub fn validate_relpath(cfg: &Config, rel: &str) -> Result<PathBuf, PathError> {
         }
     }
 
-    let joined = cfg.source_dir.join(rel_path);
+    let joined = base.join(rel_path);
     let canonical = std::fs::canonicalize(&joined).map_err(|_| PathError::NotFound)?;
 
-    // Re-confirm containment on the resolved path: a symlink inside the source
+    // Re-confirm containment on the resolved path: a symlink inside the base
     // could otherwise point anywhere (design.md §10).
-    if !is_under(&canonical, &cfg.source_dir) {
+    if !is_under(&canonical, base) {
         return Err(PathError::OutsideSource);
     }
-    if is_under(&canonical, &cfg.keep_dir) || is_under(&canonical, &cfg.trash_dir) {
+    if forbidden.iter().any(|f| is_under(&canonical, f)) {
         return Err(PathError::InsideDestination);
     }
 
@@ -186,6 +198,23 @@ mod tests {
         assert_eq!(
             validate_relpath(&cfg, rel.to_str().unwrap()),
             Err(PathError::InsideDestination)
+        );
+    }
+
+    #[test]
+    fn validate_under_keep_base_accepts_kept_file() {
+        let (cfg, _tmp) = test_config();
+        touch(&cfg.keep_dir.join("sub/kept.png"));
+        let resolved = validate_relpath_under(&cfg.keep_dir, "sub/kept.png", &[]).unwrap();
+        assert_eq!(resolved, cfg.keep_dir.join("sub/kept.png"));
+        // The same traversal rules apply against the alternate base.
+        assert_eq!(
+            validate_relpath_under(&cfg.keep_dir, "../escape.png", &[]),
+            Err(PathError::ParentTraversal)
+        );
+        assert_eq!(
+            validate_relpath_under(&cfg.keep_dir, "missing.png", &[]),
+            Err(PathError::NotFound)
         );
     }
 

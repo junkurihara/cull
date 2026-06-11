@@ -56,6 +56,7 @@ HTTP and implements no auth of its own.
 | meta  | `i`       | tap         |
 | zoom  | `+` / `-` / `0` | pinch; tap to reset |
 | help  | `?`       | `?` button  |
+| keep gallery | `g` | `▦` button |
 
 The status bar shows the remaining backlog plus today's totals (`✓` kept /
 `✗` trashed). Totals are counted server-side per calendar day, so phone and
@@ -66,6 +67,16 @@ restarts. Set `TZ_OFFSET_HOURS` so "today" rolls over at your local midnight.
 state, so it reappears after a refresh. `undo` is a bounded, in-memory "take
 back the last move" stack (not a journal); it fails with HTTP 409 once the stack
 is empty or the moved file has been reclaimed externally.
+
+### Keep gallery
+
+The gallery (`g` or the `▦` button, hash-routed as `#keep` so the phone back
+button closes it) shows everything under `KEEP_DIR` as a thumbnail grid, newest
+first. Tap a thumbnail to view it full size, then **restore** it to the source
+tree for re-triage or demote it to **trash**. Gallery moves adjust the daily
+totals but are not undoable via the main undo stack — the reverse of a restore
+is simply keeping the image again. Thumbnails (~320px JPEG) are generated on
+demand and cached in memory (32 MiB LRU); nothing is written to disk.
 
 ## Configuration (environment)
 
@@ -90,6 +101,10 @@ is empty or the moved file has been reclaimed externally.
 - `POST /api/undo` — undo the last move (409 if not possible)
 - `GET  /api/count` — approximate backlog size
 - `GET  /api/stats` — today's keep/trash totals (also echoed in move/undo responses)
+- `GET  /api/keep/list?after=<relpath>&limit=<n>` — kept images, newest first (page ≤ 200)
+- `GET  /api/keep/image/<relpath>` / `GET /api/keep/thumb/<relpath>` — kept image / 320px JPEG thumb
+- `POST /api/keep/restore` `{ "relpath": ... }` — move back to source for re-triage
+- `POST /api/keep/trash` `{ "relpath": ... }` — move a kept image to trash
 
 ## Development
 
