@@ -245,6 +245,53 @@ async fn keep_gallery_list_thumb_and_retriage() {
 }
 
 #[tokio::test]
+async fn keep_thumb_revalidates_via_etag() {
+    let (state, _tmp) = state_with_tree();
+    post_json(&state, "/api/keep", json!({"relpath":"Image_00001_.png"})).await;
+
+    // First fetch: 200 with a file-identity ETag and a revalidation policy.
+    let resp = router(state.clone())
+        .oneshot(
+            Request::builder()
+                .uri("/api/keep/thumb/Image_00001_.png")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(
+        resp.headers()
+            .get("cache-control")
+            .and_then(|v| v.to_str().ok()),
+        Some("private, no-cache")
+    );
+    let etag = resp
+        .headers()
+        .get("etag")
+        .and_then(|v| v.to_str().ok())
+        .expect("thumb response must carry an ETag")
+        .to_string();
+
+    // Conditional re-fetch with the same identity: 304, empty body.
+    let resp = router(state.clone())
+        .oneshot(
+            Request::builder()
+                .uri("/api/keep/thumb/Image_00001_.png")
+                .header("if-none-match", &etag)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_MODIFIED);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    assert!(bytes.is_empty());
+}
+
+#[tokio::test]
 async fn keep_gallery_rejects_traversal_and_missing() {
     let (state, _tmp) = state_with_tree();
     let (status, _) = post_json(

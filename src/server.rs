@@ -189,28 +189,39 @@ impl ThumbCache {
     }
 }
 
-/// Cache key for a thumbnail: relpath plus file identity (size, mtime).
-fn thumb_key(rel: &str, abs: &FsPath) -> Result<String, ApiError> {
+/// Identity of a thumbnail source file: the server-side cache key (scoped by
+/// relpath) and the HTTP ETag (size+mtime only — the URL already scopes the
+/// path), so browsers revalidate instead of trusting a path-keyed URL.
+struct ThumbIdentity {
+    key: String,
+    etag: String,
+}
+
+fn thumb_identity(rel: &str, abs: &FsPath) -> Result<ThumbIdentity, ApiError> {
     let md = std::fs::metadata(abs).map_err(|_| ApiError::from(PathError::NotFound))?;
-    // A filesystem without mtime degrades the key to (path, size), which only
-    // risks staleness if a same-sized file replaces another at the same path.
+    // A filesystem without mtime degrades the identity to (path, size), which
+    // only risks staleness if a same-sized file replaces another at the same
+    // path.
     let mtime = md
         .modified()
         .ok()
         .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
         .map(|d| d.as_secs())
         .unwrap_or(0);
-    Ok(format!("{rel}|{}|{mtime}", md.len()))
+    Ok(ThumbIdentity {
+        key: format!("{rel}|{}|{mtime}", md.len()),
+        etag: format!("\"{}-{mtime}\"", md.len()),
+    })
 }
 
 /// Decode `abs`, downscale to fit THUMB_MAX_DIM, and encode as JPEG. Alpha is
 /// dropped via RGB conversion (generated images are effectively opaque).
 fn make_thumb(abs: &FsPath) -> Result<Vec<u8>, ApiError> {
     let img = image::open(abs).map_err(|e| {
-        ApiError::internal(format!(
-            "thumbnail decode failed for {}: {e}",
-            abs.display()
-        ))
+        // Log the absolute path for the operator, but keep it out of the
+        // client-visible error body (it is server-local information).
+        tracing::warn!(path = %abs.display(), error = %e, "thumbnail decode failed");
+        ApiError::internal("thumbnail decode failed".to_string())
     })?;
     let thumb =
         image::DynamicImage::ImageRgb8(img.thumbnail(THUMB_MAX_DIM, THUMB_MAX_DIM).to_rgb8());
@@ -494,29 +505,46 @@ async fn keep_image(
 async fn keep_thumb(
     State(st): State<Arc<AppState>>,
     Path(relpath): Path<String>,
+    headers: axum::http::HeaderMap,
 ) -> Result<Response, ApiError> {
-    let bytes = run_blocking(move || {
+    let if_none_match = headers
+        .get(header::IF_NONE_MATCH)
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_owned);
+    let (etag, body) = run_blocking(move || {
         let abs = paths::validate_relpath_under(&st.cfg.keep_dir, &relpath, &[])?;
-        let key = thumb_key(&relpath, &abs)?;
-        if let Some(hit) = st.thumbs.lock().expect("thumb mutex poisoned").get(&key) {
-            return Ok(hit);
+        let id = thumb_identity(&relpath, &abs)?;
+        // The URL is keyed by relpath only, and a different file can later
+        // occupy the same relpath. The ETag carries the file identity, so a
+        // matching conditional request short-circuits to 304 and a changed
+        // file is re-fetched instead of served stale from the browser cache.
+        if if_none_match.as_deref() == Some(id.etag.as_str()) {
+            return Ok((id.etag, None));
+        }
+        if let Some(hit) = st.thumbs.lock().expect("thumb mutex poisoned").get(&id.key) {
+            return Ok((id.etag, Some(hit)));
         }
         // Generated outside the lock; a racing duplicate is dropped in put().
         let thumb = Arc::new(make_thumb(&abs)?);
         st.thumbs
             .lock()
             .expect("thumb mutex poisoned")
-            .put(key, thumb.clone());
-        Ok(thumb)
+            .put(id.key, thumb.clone());
+        Ok((id.etag, Some(thumb)))
     })
     .await?;
-    Response::builder()
-        .header(header::CONTENT_TYPE, "image/jpeg")
-        // A thumb is immutable per (path, size, mtime) key; let the browser
-        // cache it across gallery scrolling without revalidating.
-        .header(header::CACHE_CONTROL, "private, max-age=3600")
-        .body(Body::from(bytes.to_vec()))
-        .map_err(|e| ApiError::internal(format!("failed to build thumb response: {e}")))
+    let builder = Response::builder()
+        .header(header::ETAG, etag)
+        // no-cache = store but revalidate on every use; the 304 path above
+        // keeps that revalidation a cheap stat() instead of a re-encode.
+        .header(header::CACHE_CONTROL, "private, no-cache");
+    match body {
+        Some(bytes) => builder
+            .header(header::CONTENT_TYPE, "image/jpeg")
+            .body(Body::from(bytes.to_vec())),
+        None => builder.status(StatusCode::NOT_MODIFIED).body(Body::empty()),
+    }
+    .map_err(|e| ApiError::internal(format!("failed to build thumb response: {e}")))
 }
 
 #[derive(Debug, Serialize)]

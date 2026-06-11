@@ -989,9 +989,12 @@
         const btn = document.createElement("button");
         btn.className = "gcell";
         btn.type = "button";
+        // The relpath is the only meaningful name a generated image has; it
+        // gives the button an accessible label for assistive tech.
+        btn.setAttribute("aria-label", "View " + rel);
         const im = document.createElement("img");
         im.loading = "lazy";
-        im.alt = "";
+        im.alt = rel;
         im.src = keepThumbUrl(rel);
         btn.appendChild(im);
         btn.addEventListener("click", () => openViewer(gItems.indexOf(rel)));
@@ -1078,6 +1081,7 @@
         if (i < 0 || i >= gItems.length) return;
         gIndex = i;
         els.gimg.src = keepImageUrl(gItems[i]);
+        els.gimg.alt = gItems[i];
         els.gname.textContent = gItems[i];
         els.gviewer.classList.add("show");
       }
