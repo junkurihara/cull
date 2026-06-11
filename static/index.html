@@ -348,7 +348,7 @@
     </div>
     <div id="bar">
       <span id="count">…</span>
-      <span id="stats"></span>
+      <span id="stats"><span class="st-k"></span> <span class="st-t"></span></span>
       <span id="relpath"></span>
       <span id="hints">→ keep · ← trash · ↓ skip · ⌫ undo · i meta · ? help</span>
       <button id="helpbtn" type="button" aria-label="Help">?</button>
@@ -399,7 +399,8 @@
         frame: document.getElementById("frame"),
         relpath: document.getElementById("relpath"),
         count: document.getElementById("count"),
-        stats: document.getElementById("stats"),
+        statsKept: document.querySelector("#stats .st-k"),
+        statsTrashed: document.querySelector("#stats .st-t"),
         message: document.getElementById("message"),
         meta: document.getElementById("meta"),
         toast: document.getElementById("toast"),
@@ -511,15 +512,12 @@
       }
 
       // Today's totals come from the server (so phone and PC sessions add up)
-      // and are echoed in every move/undo response — no extra requests.
+      // and are echoed in every move/undo response — no extra requests. The
+      // spans are static markup; only their text is updated (no innerHTML).
       function updateStats(s) {
         if (!s) return;
-        els.stats.innerHTML =
-          '<span class="st-k">✓' +
-          (Number(s.kept) || 0) +
-          '</span> <span class="st-t">✗' +
-          (Number(s.trashed) || 0) +
-          "</span>";
+        els.statsKept.textContent = "✓" + (Number(s.kept) || 0);
+        els.statsTrashed.textContent = "✗" + (Number(s.trashed) || 0);
       }
 
       function showMessage(text, clickable) {
