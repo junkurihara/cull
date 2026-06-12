@@ -247,6 +247,79 @@ pub fn list_keep_page(
         .collect())
 }
 
+/// Minimal SplitMix64 PRNG. A few lines of arithmetic let the random
+/// slideshow sample reproducibly from a seed without pulling in a `rand`
+/// dependency. Not cryptographic, which is fine for picking pictures.
+struct SplitMix64 {
+    state: u64,
+}
+
+impl SplitMix64 {
+    fn new(seed: u64) -> Self {
+        SplitMix64 { state: seed }
+    }
+
+    fn next_u64(&mut self) -> u64 {
+        self.state = self.state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let mut z = self.state;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^ (z >> 31)
+    }
+
+    /// A value in `0..bound`. The modulo bias is negligible for the small
+    /// bounds (reservoir indices) this sees against a 64-bit draw.
+    fn next_below(&mut self, bound: u64) -> u64 {
+        self.next_u64() % bound
+    }
+}
+
+/// Reservoir-sample up to `n` kept images uniformly at random in a single
+/// pass, seeded by `seed` for reproducibility. O(n_total) time and O(n) space:
+/// the keep set is never materialized as a list, in keeping with the
+/// stateless-walk principle (design.md §1). The selected entries are then
+/// stat'd for their display mtime (as the name-sorted listing does).
+///
+/// The returned order is the reservoir's internal order (already a uniform
+/// random subset); the slideshow does not depend on it being shuffled further.
+pub fn sample_keep(cfg: &Config, n: usize, seed: u64) -> io::Result<Vec<KeepItem>> {
+    let mut rng = SplitMix64::new(seed);
+    let mut reservoir: Vec<String> = Vec::with_capacity(n);
+    // Index of the current item (0-based), i.e. how many have been seen so far.
+    let mut seen: u64 = 0;
+    walk_dir(
+        cfg,
+        &cfg.keep_dir,
+        "",
+        &[],
+        &mut |rel: &str, _abs: &Path| {
+            if n == 0 {
+                return;
+            }
+            if reservoir.len() < n {
+                reservoir.push(rel.to_string());
+            } else {
+                // Classic algorithm R: replace a random slot with probability n/seen.
+                let j = rng.next_below(seen + 1);
+                if (j as usize) < n {
+                    reservoir[j as usize] = rel.to_string();
+                }
+            }
+            seen += 1;
+        },
+    )?;
+    Ok(reservoir
+        .into_iter()
+        .map(|rel| {
+            let mtime = mtime_ms(&cfg.keep_dir.join(&rel)).unwrap_or(0);
+            KeepItem {
+                rel,
+                mtime_ms: mtime,
+            }
+        })
+        .collect())
+}
+
 /// Walk every eligible image in the source tree, invoking `f` with each
 /// relative and absolute path. Pruning, hidden-file exclusion and the
 /// extension filter are applied here so callers see only candidate images.
@@ -581,5 +654,66 @@ mod tests {
         .unwrap();
         assert_eq!(find_next(&cfg, None).unwrap(), None);
         assert_eq!(count_backlog(&cfg).unwrap(), 0);
+    }
+
+    /// Every rel under KEEP_DIR (sorted), the universe a sample draws from.
+    fn keep_universe(cfg: &Config) -> Vec<String> {
+        let mut all = list_keep_page(cfg, KeepSort::Name, false, None, 1000).unwrap();
+        all.sort_by(|a, b| a.rel.cmp(&b.rel));
+        all.into_iter().map(|i| i.rel).collect()
+    }
+
+    #[test]
+    fn sample_keep_is_deterministic_and_a_valid_subset() {
+        let (cfg, _tmp) = setup();
+        // setup() wrote keep/kept.png; add a handful more for a real sample.
+        for name in ["a.png", "b.png", "sub/c.png", "sub/d.png", "e.png"] {
+            write_keep(&cfg, name);
+        }
+        let universe = keep_universe(&cfg); // 6 entries total
+
+        let first = sample_keep(&cfg, 3, 42).unwrap();
+        // Exactly n entries, all distinct, all drawn from the keep set.
+        assert_eq!(first.len(), 3);
+        let mut rels: Vec<&str> = first.iter().map(|i| i.rel.as_str()).collect();
+        rels.sort_unstable();
+        rels.dedup();
+        assert_eq!(rels.len(), 3, "sample must not repeat an image");
+        assert!(rels.iter().all(|r| universe.iter().any(|u| u == r)));
+
+        // Same seed -> identical selection (reproducible). The mtime is filled
+        // from a stat of each chosen file.
+        let again = sample_keep(&cfg, 3, 42).unwrap();
+        let names = |v: &[KeepItem]| v.iter().map(|i| i.rel.clone()).collect::<Vec<_>>();
+        assert_eq!(names(&first), names(&again));
+    }
+
+    #[test]
+    fn sample_keep_handles_boundaries() {
+        let (cfg, _tmp) = setup();
+        for name in ["a.png", "b.png"] {
+            write_keep(&cfg, name);
+        }
+        let universe = keep_universe(&cfg); // kept.png + a.png + b.png = 3
+
+        // n == 0 yields nothing.
+        assert!(sample_keep(&cfg, 0, 1).unwrap().is_empty());
+
+        // n >= total returns the whole set (order-independent).
+        let mut all: Vec<String> = sample_keep(&cfg, 10, 7)
+            .unwrap()
+            .into_iter()
+            .map(|i| i.rel)
+            .collect();
+        all.sort();
+        assert_eq!(all, universe);
+    }
+
+    #[test]
+    fn sample_keep_empty_keep_is_empty() {
+        let (cfg, _tmp) = setup();
+        // setup() seeds keep/kept.png; remove it so KEEP_DIR holds no images.
+        fs::remove_file(cfg.keep_dir.join("kept.png")).unwrap();
+        assert!(sample_keep(&cfg, 5, 99).unwrap().is_empty());
     }
 }
