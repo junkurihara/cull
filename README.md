@@ -57,6 +57,7 @@ HTTP and implements no auth of its own.
 | zoom  | `+` / `-` / `0` | pinch; tap to reset |
 | help  | `?`       | `?` button  |
 | keep gallery | `g` | `▦` button |
+| slideshow | `p` (in gallery) | `▶` button |
 
 The status bar shows the remaining backlog plus today's totals (`✓` kept /
 `✗` trashed). Totals are counted server-side per calendar day, so phone and
@@ -75,10 +76,23 @@ button closes it) shows everything under `KEEP_DIR` as a thumbnail grid. The
 order is switchable (dropdown, or cycle with `s`): by modification time —
 which `rename(2)` preserves, so it equals generation time — newest or oldest
 first, or by name. Tap a thumbnail to view it full size, then **restore** it to the source
-tree for re-triage or demote it to **trash**. Gallery moves adjust the daily
+tree for re-triage or demote it to **trash**. In the viewer, `i` / a tap on the
+image / the `ⓘ` button shows the same prompt metadata panel as the main view
+(served from `KEEP_DIR`). Gallery moves adjust the daily
 totals but are not undoable via the main undo stack — the reverse of a restore
 is simply keeping the image again. Thumbnails (~320px JPEG) are generated on
 demand and cached in memory (32 MiB LRU); nothing is written to disk.
+
+### Slideshow
+
+From the gallery, `p` or the `▶` button starts a fullscreen **random
+slideshow** of kept images (hash-routed as `#slides`, nested above the gallery
+so the phone back button steps back out). It auto-advances every few seconds;
+`Space` / a tap toggles play-pause, `←` / `→` (or horizontal swipe) step
+manually, and `Esc` / `p` / a downward swipe exits. The playlist is drawn from
+`GET /api/keep/random`, which reservoir-samples the keep tree in a single pass
+without the server holding any image list; the client de-duplicates across
+batches and loops once the set is covered.
 
 ## Configuration (environment)
 
@@ -104,7 +118,9 @@ demand and cached in memory (32 MiB LRU); nothing is written to disk.
 - `GET  /api/count` — approximate backlog size
 - `GET  /api/stats` — today's keep/trash totals (also echoed in move/undo responses)
 - `GET  /api/keep/list?sort=mtime|name&dir=desc|asc&after=<relpath>&after_mtime=<ms>&limit=<n>` — kept images (default: newest mtime first; page ≤ 200)
+- `GET  /api/keep/random?n=<n>&seed=<u64>` — a random sample of kept images for the slideshow (reservoir-sampled in one pass; `n` clamped 1–200, default 30; omit `seed` for a fresh shuffle)
 - `GET  /api/keep/image/<relpath>` / `GET /api/keep/thumb/<relpath>` — kept image / 320px JPEG thumb
+- `GET  /api/keep/meta/<relpath>` — formatted prompt JSON for a kept image (same extraction as `/api/meta`, resolved under `KEEP_DIR`)
 - `POST /api/keep/restore` `{ "relpath": ... }` — move back to source for re-triage
 - `POST /api/keep/trash` `{ "relpath": ... }` — move a kept image to trash
 

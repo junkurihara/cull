@@ -248,8 +248,10 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/undo", post(undo))
         // Keep gallery: paginated listing, thumbnails, and re-triage moves.
         .route("/api/keep/list", get(keep_list))
+        .route("/api/keep/random", get(keep_random))
         .route("/api/keep/image/{*relpath}", get(keep_image))
         .route("/api/keep/thumb/{*relpath}", get(keep_thumb))
+        .route("/api/keep/meta/{*relpath}", get(keep_meta))
         .route("/api/keep/restore", post(keep_restore))
         .route("/api/keep/trash", post(keep_trash))
         .layer(tower_http::trace::TraceLayer::new_for_http())
@@ -452,6 +454,9 @@ async fn undo(State(st): State<Arc<AppState>>) -> Result<Json<UndoResponse>, Api
 
 const KEEP_PAGE_DEFAULT: usize = 60;
 const KEEP_PAGE_MAX: usize = 200;
+/// Default playlist length for one `random` request (the slideshow tops up as
+/// it advances). Clamped to the same ceiling as a list page.
+const KEEP_RANDOM_DEFAULT: usize = 30;
 
 #[derive(Debug, Deserialize)]
 struct KeepListParams {
@@ -542,6 +547,48 @@ async fn keep_list(
     Ok(Json(KeepListResponse { items }))
 }
 
+/// A random sample of kept images for the slideshow. Same response shape as
+/// `keep_list` (`{ items: [{rel, mtime}] }`); the server holds no image list
+/// (design.md §1) — every call reservoir-samples a fresh pass over KEEP_DIR.
+#[derive(Debug, Deserialize)]
+struct KeepRandomParams {
+    /// Sample size; defaults to `KEEP_RANDOM_DEFAULT`, clamped to the page max.
+    n: Option<usize>,
+    /// PRNG seed; the client passes a fresh value to reshuffle. Absent ->
+    /// derived from the wall clock so a bare request is still random.
+    seed: Option<u64>,
+}
+
+/// Seed derived from the wall clock, used when the client supplies none.
+fn random_seed() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0)
+}
+
+async fn keep_random(
+    State(st): State<Arc<AppState>>,
+    Query(params): Query<KeepRandomParams>,
+) -> Result<Json<KeepListResponse>, ApiError> {
+    let cfg = st.cfg.clone();
+    let n = params
+        .n
+        .unwrap_or(KEEP_RANDOM_DEFAULT)
+        .clamp(1, KEEP_PAGE_MAX);
+    let seed = params.seed.unwrap_or_else(random_seed);
+    let items =
+        run_blocking(move || walk::sample_keep(&cfg, n, seed).map_err(ApiError::from)).await?;
+    let items = items
+        .into_iter()
+        .map(|i| KeepListItem {
+            rel: i.rel,
+            mtime: i.mtime_ms,
+        })
+        .collect();
+    Ok(Json(KeepListResponse { items }))
+}
+
 async fn keep_image(
     State(st): State<Arc<AppState>>,
     Path(relpath): Path<String>,
@@ -554,6 +601,22 @@ async fn keep_image(
     })
     .await?;
     image_response(&abs, bytes)
+}
+
+/// Metadata for a kept image: identical extraction to `/api/meta` but resolved
+/// against KEEP_DIR so the gallery viewer can show prompts (mirror of
+/// `keep_image`).
+async fn keep_meta(
+    State(st): State<Arc<AppState>>,
+    Path(relpath): Path<String>,
+) -> Result<Json<meta::Meta>, ApiError> {
+    let cfg = st.cfg.clone();
+    let meta = run_blocking(move || {
+        let abs = paths::validate_relpath_under(&cfg.keep_dir, &relpath, &[])?;
+        Ok(meta::extract_meta(&abs))
+    })
+    .await?;
+    Ok(Json(meta))
 }
 
 async fn keep_thumb(

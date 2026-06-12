@@ -42,6 +42,21 @@ fn write_png(path: &std::path::Path) {
     writer.write_image_data(&[0u8]).unwrap();
 }
 
+/// A 1x1 PNG carrying a `prompt` tEXt chunk (the executed API graph), so the
+/// metadata endpoints have something to extract.
+fn write_png_with_prompt(path: &std::path::Path, prompt: &str) {
+    use std::io::BufWriter;
+    let file = std::fs::File::create(path).unwrap();
+    let mut encoder = png::Encoder::new(BufWriter::new(file), 1, 1);
+    encoder.set_color(png::ColorType::Grayscale);
+    encoder.set_depth(png::BitDepth::Eight);
+    encoder
+        .add_text_chunk("prompt".to_string(), prompt.to_string())
+        .unwrap();
+    let mut writer = encoder.write_header().unwrap();
+    writer.write_image_data(&[0u8]).unwrap();
+}
+
 async fn get(state: &Arc<AppState>, uri: &str) -> (StatusCode, Vec<u8>) {
     let resp = router(state.clone())
         .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
@@ -400,4 +415,77 @@ async fn meta_for_plain_png_is_empty() {
     let v = json(&body);
     assert!(v["raw"].is_null());
     assert_eq!(v["prompts"].as_array().unwrap().len(), 0);
+}
+
+#[tokio::test]
+async fn keep_meta_extracts_prompt_and_handles_plain() {
+    let (state, tmp) = state_with_tree();
+    let source = tmp.path().join("output");
+    let graph = r#"{
+        "3": {"class_type":"KSampler","inputs":{"positive":["6",0],"negative":["7",0]}},
+        "6": {"class_type":"CLIPTextEncode","inputs":{"text":"a calm lake"}},
+        "7": {"class_type":"CLIPTextEncode","inputs":{"text":"noise"}}
+    }"#;
+    write_png_with_prompt(&source.join("graph.png"), graph);
+
+    // A kept image with a graph yields the same extraction as the source-based
+    // /api/meta, but resolved under KEEP_DIR.
+    post_json(&state, "/api/keep", json!({"relpath":"graph.png"})).await;
+    let (status, body) = get(&state, "/api/keep/meta/graph.png").await;
+    assert_eq!(status, StatusCode::OK);
+    let v = json(&body);
+    assert!(v["raw"].is_string());
+    assert_eq!(v["prompts"][0]["positive"], "a calm lake");
+    assert_eq!(v["prompts"][0]["negative"], "noise");
+
+    // A plain kept PNG returns empty meta gracefully (not an error).
+    post_json(&state, "/api/keep", json!({"relpath":"Image_00001_.png"})).await;
+    let (status, body) = get(&state, "/api/keep/meta/Image_00001_.png").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(json(&body)["raw"].is_null());
+
+    // A missing kept path is 404, as for the other keep endpoints.
+    let (status, _) = get(&state, "/api/keep/meta/missing.png").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn keep_random_samples_within_the_keep_set() {
+    let (state, _tmp) = state_with_tree();
+    // Move the two fixtures into keep and add four more kept PNGs directly, for
+    // a six-image universe to sample from.
+    post_json(&state, "/api/keep", json!({"relpath":"Image_00001_.png"})).await;
+    post_json(&state, "/api/keep", json!({"relpath":"Image_00002_.png"})).await;
+    for name in ["k3.png", "k4.png", "k5.png", "k6.png"] {
+        write_png(&state.cfg.keep_dir.join(name));
+    }
+    let (_, body) = get(&state, "/api/keep/list?sort=name&limit=200").await;
+    let mut universe = list_rels(&json(&body));
+    universe.sort();
+    assert_eq!(universe.len(), 6);
+
+    // A bounded sample: exactly n entries, distinct, all drawn from the set.
+    let (status, body) = get(&state, "/api/keep/random?n=3&seed=1").await;
+    assert_eq!(status, StatusCode::OK);
+    let rels = list_rels(&json(&body));
+    assert_eq!(rels.len(), 3);
+    let mut uniq = rels.clone();
+    uniq.sort();
+    uniq.dedup();
+    assert_eq!(uniq.len(), 3, "a sample must not repeat an image");
+    assert!(rels.iter().all(|r| universe.contains(r)));
+
+    // The same seed reproduces the same selection (set equality).
+    let (_, body) = get(&state, "/api/keep/random?n=3&seed=1").await;
+    let mut again = list_rels(&json(&body));
+    let mut first = rels.clone();
+    again.sort();
+    first.sort();
+    assert_eq!(first, again);
+
+    // n above the set size is clamped to the whole set, not an error.
+    let (_, body) = get(&state, "/api/keep/random?n=999").await;
+    let mut all = list_rels(&json(&body));
+    all.sort();
+    assert_eq!(all, universe);
 }

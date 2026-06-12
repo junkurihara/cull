@@ -252,6 +252,54 @@
       #gtrashbtn {
         border-color: #c62828;
       }
+      /* Random slideshow: a kept image fullscreen, auto-advancing. Sits above
+         the gallery viewer (8) at the same layer as the meta panel (they are
+         never shown together). */
+      #slideshow {
+        position: fixed;
+        inset: 0;
+        display: none;
+        background: #000;
+        z-index: 9;
+        touch-action: none; /* we handle swipes ourselves */
+      }
+      #slideshow.show {
+        display: block;
+      }
+      #slideimg {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        object-fit: contain;
+        user-select: none;
+        -webkit-user-drag: none;
+      }
+      #slidename {
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        padding: 6px 10px;
+        font-size: 12px;
+        opacity: 0.7;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        background: linear-gradient(rgba(0, 0, 0, 0.6), rgba(0, 0, 0, 0));
+        pointer-events: none;
+      }
+      #slidebar {
+        position: absolute;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        display: flex;
+        gap: 8px;
+        justify-content: center;
+        padding: 10px 10px calc(10px + env(safe-area-inset-bottom));
+        background: linear-gradient(rgba(0, 0, 0, 0), rgba(0, 0, 0, 0.6));
+      }
       /* Help overlay */
       #help {
         position: fixed;
@@ -332,7 +380,8 @@
       #toast.show {
         opacity: 1;
       }
-      /* Metadata panel */
+      /* Metadata panel. z-index sits above the gallery viewer (8) so it can be
+         shown over a kept image, but below help (10) and toast (12). */
       #meta {
         position: fixed;
         top: 0;
@@ -345,6 +394,7 @@
         overflow: auto;
         display: none;
         font-size: 13px;
+        z-index: 9;
       }
       #meta.show {
         display: block;
@@ -501,6 +551,7 @@
           <option value="name:desc">name Z→A</option>
         </select>
         <span id="gstatus"></span>
+        <button id="slidebtn" class="barbtn" type="button" aria-label="Slideshow">▶</button>
       </div>
       <div id="ggrid"><div id="gsentinel"></div></div>
       <div id="gempty">No kept images</div>
@@ -511,7 +562,18 @@
       <div id="gactions">
         <button id="grestore" class="gact" type="button">↩ restore</button>
         <button id="gtrashbtn" class="gact" type="button">✗ trash</button>
+        <button id="gmetabtn" class="gact" type="button">ⓘ meta</button>
         <button id="gclosev" class="gact" type="button">✕ close</button>
+      </div>
+    </div>
+    <div id="slideshow">
+      <img id="slideimg" alt="" />
+      <div id="slidename"></div>
+      <div id="slidebar">
+        <button id="slideprev" class="gact" type="button" aria-label="Previous">‹</button>
+        <button id="slideplay" class="gact" type="button" aria-label="Play / pause">⏸</button>
+        <button id="slidenext" class="gact" type="button" aria-label="Next">›</button>
+        <button id="slideclose" class="gact" type="button">✕ close</button>
       </div>
     </div>
     <div id="message">Loading…</div>
@@ -542,8 +604,13 @@
           <tr><td>tap thumbnail</td><td>view full size</td></tr>
           <tr><td>← / → or swipe</td><td>navigate</td></tr>
           <tr><td>s</td><td>cycle sort (date / name)</td></tr>
+          <tr><td>i / tap / ⓘ</td><td>metadata panel</td></tr>
           <tr><td>swipe ↓ / Esc</td><td>close viewer</td></tr>
           <tr><td>restore</td><td>send back for re-triage</td></tr>
+          <tr class="sect"><td colspan="2">Slideshow (▶ / p)</td></tr>
+          <tr><td>Space / tap</td><td>play / pause</td></tr>
+          <tr><td>← / → or swipe</td><td>previous / next</td></tr>
+          <tr><td>swipe ↓ / Esc / p</td><td>exit</td></tr>
           <tr class="sect"><td colspan="2">Status bar</td></tr>
           <tr><td>✓ / ✗</td><td>kept / trashed today (all devices)</td></tr>
         </table>
@@ -589,7 +656,16 @@
         gname: document.getElementById("gname"),
         grestore: document.getElementById("grestore"),
         gtrashbtn: document.getElementById("gtrashbtn"),
+        gmetabtn: document.getElementById("gmetabtn"),
         gclosev: document.getElementById("gclosev"),
+        slidebtn: document.getElementById("slidebtn"),
+        slideshow: document.getElementById("slideshow"),
+        slideimg: document.getElementById("slideimg"),
+        slidename: document.getElementById("slidename"),
+        slideprev: document.getElementById("slideprev"),
+        slideplay: document.getElementById("slideplay"),
+        slidenext: document.getElementById("slidenext"),
+        slideclose: document.getElementById("slideclose"),
       };
 
       // Directional feedback for an action: an edge glow plus a center badge.
@@ -946,10 +1022,13 @@
           .replace(/>/g, "&gt;");
       }
 
-      async function loadMeta(rel) {
+      // Fetch a Meta payload from `url` and paint it into the shared panel. The
+      // main view and the gallery viewer differ only in which endpoint they
+      // hit (source-based vs keep-based), so the rendering is shared.
+      async function fetchMetaInto(url) {
         els.meta.innerHTML = "<p style='opacity:.5'>Loading…</p>";
         try {
-          const res = await fetch(metaUrl(rel));
+          const res = await fetch(url);
           if (!res.ok) {
             renderMeta(null);
             return;
@@ -959,6 +1038,8 @@
           renderMeta(null);
         }
       }
+
+      const loadMeta = (rel) => fetchMetaInto(metaUrl(rel));
 
       function toggleMeta() {
         metaOpen = !metaOpen;
@@ -995,9 +1076,11 @@
       let gIndex = null; // viewer position in gItems, or null when closed
       let gBusy = false;
       let gRestored = 0; // restores this visit -> main queue refresh on close
+      let gMetaOpen = false; // gallery viewer metadata panel visible
 
       const keepThumbUrl = (rel) => api("api/keep/thumb/" + encodeRel(rel));
       const keepImageUrl = (rel) => api("api/keep/image/" + encodeRel(rel));
+      const keepMetaUrl = (rel) => api("api/keep/meta/" + encodeRel(rel));
 
       function updateGStatus() {
         els.gstatus.textContent = gItems.length
@@ -1090,29 +1173,44 @@
         toast(els.gsort.options[els.gsort.selectedIndex].text);
       }
 
-      function syncGalleryToHash() {
-        const want = location.hash === "#keep";
-        if (want === galleryOpen) return;
-        galleryOpen = want;
-        els.gallery.classList.toggle("show", want);
-        if (want) {
-          gRestored = 0;
-          resetGallery();
-          loadMoreGallery();
-        } else {
-          closeViewer();
-          // Restored files re-enter the source tree at arbitrary positions;
-          // only a fresh walk can surface them, so rebuild the main queue.
-          if (gRestored > 0) {
+      // Hash router for the overlay layers. `#slides` implies the gallery is
+      // the context underneath, so the slideshow nests above it: #keep ->
+      // #slides starts the show, and the phone back button steps back out
+      // (#slides -> #keep stops it, -> "" closes the gallery).
+      function syncRoute() {
+        const h = location.hash;
+        const wantGallery = h === "#keep" || h === "#slides";
+        const wantSlides = h === "#slides";
+        if (wantGallery !== galleryOpen) {
+          galleryOpen = wantGallery;
+          els.gallery.classList.toggle("show", wantGallery);
+          if (wantGallery) {
+            // The shared meta panel now sits above the gallery (z-index); make
+            // sure a main-view meta left open does not float over the grid.
+            metaOpen = false;
+            els.meta.classList.remove("show");
             gRestored = 0;
-            queue = [];
-            exhausted = false;
-            tailAfter = null;
-            bootstrap();
+            resetGallery();
+            loadMoreGallery();
+          } else {
+            closeViewer();
+            // Restored files re-enter the source tree at arbitrary positions;
+            // only a fresh walk can surface them, so rebuild the main queue.
+            if (gRestored > 0) {
+              gRestored = 0;
+              queue = [];
+              exhausted = false;
+              tailAfter = null;
+              bootstrap();
+            }
           }
         }
+        if (wantSlides !== slideOpen) {
+          if (wantSlides) startSlideshow();
+          else stopSlideshow();
+        }
       }
-      window.addEventListener("hashchange", syncGalleryToHash);
+      window.addEventListener("hashchange", syncRoute);
       els.gallerybtn.addEventListener("click", () => {
         els.gallerybtn.blur();
         location.hash = "keep";
@@ -1139,12 +1237,26 @@
         els.gname.textContent =
           it.rel + (it.mtime ? " · " + new Date(it.mtime).toLocaleString() : "");
         els.gviewer.classList.add("show");
+        // Keep the metadata panel in sync when paging with it open.
+        if (gMetaOpen) fetchMetaInto(keepMetaUrl(it.rel));
       }
 
       function closeViewer() {
         gIndex = null;
         els.gviewer.classList.remove("show");
         els.gimg.removeAttribute("src");
+        // The shared meta panel must not linger over the grid or main view.
+        gMetaOpen = false;
+        els.meta.classList.remove("show");
+      }
+
+      // Toggle the metadata panel for the kept image on screen. Reuses the same
+      // panel and renderer as the main view, hitting the keep-based endpoint.
+      function toggleGalleryMeta() {
+        if (gIndex == null) return;
+        gMetaOpen = !gMetaOpen;
+        els.meta.classList.toggle("show", gMetaOpen);
+        if (gMetaOpen) fetchMetaInto(keepMetaUrl(gItems[gIndex].rel));
       }
 
       function viewerNav(delta) {
@@ -1210,6 +1322,10 @@
 
       els.grestore.addEventListener("click", () => galleryAct("restore"));
       els.gtrashbtn.addEventListener("click", () => galleryAct("trash"));
+      els.gmetabtn.addEventListener("click", () => {
+        els.gmetabtn.blur();
+        toggleGalleryMeta();
+      });
       els.gclosev.addEventListener("click", closeViewer);
 
       // Viewer touch: horizontal swipe = prev/next, downward swipe = close.
@@ -1231,11 +1347,185 @@
           const dx = t.clientX - gTouch.x;
           const dy = t.clientY - gTouch.y;
           gTouch = null;
-          if (Math.abs(dx) < SWIPE_MIN && Math.abs(dy) < SWIPE_MIN) return; // tap: buttons handle it
+          if (Math.abs(dx) < SWIPE_MIN && Math.abs(dy) < SWIPE_MIN) {
+            // A tap on the image toggles metadata; taps on the action buttons
+            // are left to their own click handlers.
+            if (e.target === els.gimg) toggleGalleryMeta();
+            return;
+          }
           if (Math.abs(dx) > Math.abs(dy)) {
             viewerNav(dx < 0 ? 1 : -1); // swipe left -> older, right -> newer
           } else if (dy > 0) {
             closeViewer();
+          }
+        },
+        { passive: true }
+      );
+
+      // ---- random slideshow ----
+      // A BGM-style fullscreen view of random kept images. The playlist lives
+      // only on the client; the server reservoir-samples a fresh batch per
+      // request and holds no list (design.md §1).
+      const SLIDE_MS = 4000;
+      const SLIDE_BATCH = 30;
+      let slideOpen = false;
+      let slideItems = []; // {rel, mtime} in shuffled order
+      let slideIdx = 0;
+      let slidePlaying = false;
+      let slideTimer = null;
+      let slideSeen = new Set(); // rels already queued (dedup across batches)
+      let slideLoading = false;
+      let slideExhausted = false; // a batch added nothing new -> loop locally
+
+      async function fetchSlideBatch() {
+        if (slideLoading || slideExhausted) return;
+        slideLoading = true;
+        try {
+          // A fresh seed each call reshuffles; >>>0 keeps it a u32 for the URL.
+          const seed = (Date.now() ^ Math.floor(Math.random() * 0xffffffff)) >>> 0;
+          const res = await fetch(api("api/keep/random?n=" + SLIDE_BATCH + "&seed=" + seed));
+          if (!res.ok) {
+            toast("slideshow failed (" + res.status + ")");
+            return;
+          }
+          const data = await res.json();
+          let added = 0;
+          for (const it of data.items) {
+            if (slideSeen.has(it.rel)) continue;
+            slideSeen.add(it.rel);
+            slideItems.push(it);
+            added++;
+          }
+          // Once fresh draws stop appearing the keep set is effectively covered;
+          // stop fetching and let the playlist loop over what we already have.
+          if (added === 0) slideExhausted = true;
+        } catch (e) {
+          toast("slideshow failed");
+        } finally {
+          slideLoading = false;
+        }
+      }
+
+      function showSlide() {
+        if (slideItems.length === 0) return;
+        if (slideIdx >= slideItems.length) slideIdx = 0; // wrap
+        const it = slideItems[slideIdx];
+        els.slideimg.src = keepImageUrl(it.rel);
+        els.slideimg.alt = it.rel;
+        els.slidename.textContent =
+          it.rel + (it.mtime ? " · " + new Date(it.mtime).toLocaleString() : "");
+        // Warm the next image so the transition is instant.
+        if (slideIdx + 1 < slideItems.length) {
+          const pre = new Image();
+          pre.src = keepImageUrl(slideItems[slideIdx + 1].rel);
+        }
+        // Pull the next batch in before reaching the tail.
+        if (!slideExhausted && slideItems.length - slideIdx < 5) fetchSlideBatch();
+      }
+
+      function slideAdvance(delta) {
+        if (slideItems.length === 0) return;
+        slideIdx = (slideIdx + delta + slideItems.length) % slideItems.length;
+        showSlide();
+      }
+
+      // (Re)arm the auto-advance timer; a no-op while paused.
+      function scheduleSlide() {
+        clearTimeout(slideTimer);
+        slideTimer = null;
+        if (slidePlaying) {
+          slideTimer = setTimeout(() => {
+            slideAdvance(1);
+            scheduleSlide();
+          }, SLIDE_MS);
+        }
+      }
+
+      function setSlidePlaying(p) {
+        slidePlaying = p;
+        els.slideplay.textContent = p ? "⏸" : "▶";
+        scheduleSlide();
+      }
+
+      async function startSlideshow() {
+        if (slideOpen) return;
+        slideOpen = true;
+        closeViewer(); // never stack the slideshow over the grid viewer
+        slideItems = [];
+        slideSeen = new Set();
+        slideIdx = 0;
+        slideExhausted = false;
+        els.slideshow.classList.add("show");
+        await fetchSlideBatch();
+        if (!slideOpen) return; // closed again while the first batch loaded
+        if (slideItems.length === 0) {
+          toast("No kept images");
+          location.hash = "keep"; // fall back to the gallery
+          return;
+        }
+        showSlide();
+        setSlidePlaying(true);
+      }
+
+      function stopSlideshow() {
+        if (!slideOpen) return;
+        slideOpen = false;
+        slidePlaying = false;
+        clearTimeout(slideTimer);
+        slideTimer = null;
+        els.slideshow.classList.remove("show");
+        els.slideimg.removeAttribute("src");
+      }
+
+      els.slidebtn.addEventListener("click", () => {
+        els.slidebtn.blur();
+        location.hash = "slides";
+      });
+      els.slideprev.addEventListener("click", () => {
+        setSlidePlaying(false); // manual nav pauses the auto-advance
+        slideAdvance(-1);
+      });
+      els.slidenext.addEventListener("click", () => {
+        setSlidePlaying(false);
+        slideAdvance(1);
+      });
+      els.slideplay.addEventListener("click", () => {
+        els.slideplay.blur();
+        setSlidePlaying(!slidePlaying);
+      });
+      els.slideclose.addEventListener("click", () => {
+        location.hash = "keep";
+      });
+
+      // Slideshow touch: tap = play/pause, horizontal swipe = prev/next,
+      // downward swipe = exit. Taps on the control bar reach their buttons.
+      let slideTouch = null;
+      els.slideshow.addEventListener(
+        "touchstart",
+        (e) => {
+          if (e.touches.length === 1) {
+            slideTouch = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+          }
+        },
+        { passive: true }
+      );
+      els.slideshow.addEventListener(
+        "touchend",
+        (e) => {
+          if (!slideTouch) return;
+          const t = e.changedTouches[0];
+          const dx = t.clientX - slideTouch.x;
+          const dy = t.clientY - slideTouch.y;
+          slideTouch = null;
+          if (Math.abs(dx) < SWIPE_MIN && Math.abs(dy) < SWIPE_MIN) {
+            if (e.target === els.slideimg) setSlidePlaying(!slidePlaying);
+            return;
+          }
+          if (Math.abs(dx) > Math.abs(dy)) {
+            setSlidePlaying(false);
+            slideAdvance(dx < 0 ? 1 : -1);
+          } else if (dy > 0) {
+            location.hash = "keep";
           }
         },
         { passive: true }
@@ -1257,6 +1547,31 @@
           toggleHelp(false);
           return;
         }
+        // Slideshow is the topmost layer when running (it implies the gallery
+        // is open underneath), so it claims keys first.
+        if (slideOpen) {
+          switch (e.key) {
+            case " ":
+            case "Spacebar":
+              e.preventDefault(); // do not scroll
+              setSlidePlaying(!slidePlaying);
+              break;
+            case "ArrowRight":
+              setSlidePlaying(false);
+              slideAdvance(1);
+              break;
+            case "ArrowLeft":
+              setSlidePlaying(false);
+              slideAdvance(-1);
+              break;
+            case "Escape":
+            case "p":
+            case "P":
+              location.hash = "keep";
+              break;
+          }
+          return;
+        }
         // Gallery mode swallows the triage keys; only navigation applies.
         if (galleryOpen) {
           if (gIndex != null) {
@@ -1267,12 +1582,18 @@
               case "ArrowLeft":
                 viewerNav(-1); // newer
                 break;
+              case "i":
+              case "I":
+                toggleGalleryMeta();
+                break;
               case "Escape":
                 closeViewer();
                 break;
             }
           } else if (e.key === "s" || e.key === "S") {
             cycleSort();
+          } else if (e.key === "p" || e.key === "P") {
+            location.hash = "slides";
           } else if (e.key === "Escape" || e.key === "g" || e.key === "G") {
             location.hash = "";
           }
@@ -1540,7 +1861,7 @@
         render(); // show the scanning message right away, before any await
         fetchCountInBackground();
         fetchStatsInBackground();
-        syncGalleryToHash(); // a reload on #keep reopens the gallery
+        syncRoute(); // a reload on #keep / #slides reopens that layer
         await bootstrap();
       }
 
