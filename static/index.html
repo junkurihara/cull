@@ -283,8 +283,10 @@
         opacity: 1;
       }
       @media (prefers-reduced-motion: reduce) {
+        /* Disable the cross-fade entirely (instant swap) rather than just
+           shortening it: a reduced-motion request means no animation. */
         .slidelayer {
-          transition: opacity 0.2s ease;
+          transition: none;
         }
       }
       #slidename {
@@ -1434,6 +1436,7 @@
       let slideMetaOpen = false;
       let slideBusy = false; // an action is in flight
       let slideChromeTimer = null;
+      let slideErrorStreak = 0; // consecutive unreachable slides (loop guard)
       // Two <img> layers cross-faded on each advance; `slideFront` is the index
       // of the one currently visible. A generation counter drops the reveal of
       // an image that a newer advance has already superseded.
@@ -1441,12 +1444,15 @@
       let slideFront = 0;
       let slideGen = 0;
 
-      // Auto-advance interval, remembered across sessions. localStorage may be
-      // unavailable (private mode); fall back to the default silently.
+      // Auto-advance interval, remembered across sessions. Only a value that
+      // maps to an actual <option> is honored, so the dropdown always reflects
+      // the real interval (an unsupported stored value falls back to default).
+      // localStorage may be unavailable (private mode); fall back silently.
+      const SLIDE_SPEEDS = Array.from(els.slidespeed.options).map((o) => parseInt(o.value, 10));
       let slideIntervalMs = SLIDE_DEFAULT_MS;
       try {
         const v = parseInt(localStorage.getItem("cullSlideMs") || "", 10);
-        if (v > 0) slideIntervalMs = v;
+        if (SLIDE_SPEEDS.includes(v)) slideIntervalMs = v;
       } catch (e) {}
       els.slidespeed.value = String(slideIntervalMs);
 
@@ -1493,11 +1499,31 @@
         const reveal = () => {
           if (gen !== slideGen) return; // a newer advance won
           back.onload = null;
+          back.onerror = null;
+          slideErrorStreak = 0; // a successful load clears the unreachable run
           back.classList.add("on");
           front.classList.remove("on");
           slideFront = 1 - slideFront;
         };
+        // A kept image can vanish mid-show (external delete / rsync collect):
+        // onload never fires, so without this the slideshow would sit blank.
+        // Skip past it; if every remaining slide is unreachable, pause instead
+        // of looping forever.
+        const onerror = () => {
+          if (gen !== slideGen) return; // superseded by a newer advance
+          back.onload = null;
+          back.onerror = null;
+          slideErrorStreak++;
+          if (slideErrorStreak > slideItems.length) {
+            slideErrorStreak = 0;
+            setSlidePlaying(false);
+            toast("Images unavailable");
+            return;
+          }
+          slideAdvance(1);
+        };
         back.onload = reveal;
+        back.onerror = onerror;
         back.src = keepImageUrl(it.rel);
         back.alt = it.rel;
         if (back.complete && back.naturalWidth > 0) reveal();
@@ -1565,8 +1591,10 @@
       // the gallery viewer does.
       async function slideAct(action) {
         if (slideBusy || slideItems.length === 0) return;
-        const idx = slideIdx;
-        const rel = slideItems[idx].rel;
+        // Act on the image currently on screen. The auto-advance (or a manual
+        // nav) can move the playlist while the request is in flight, so the
+        // removal below locates the item by rel rather than a captured index.
+        const rel = slideItems[slideIdx].rel;
         slideBusy = true;
         try {
           const res = await fetch(api("api/keep/" + action), {
@@ -1588,7 +1616,13 @@
             }
           }
           toast(action === "restore" ? "Restored for re-triage" : "Moved to trash");
-          slideItems.splice(idx, 1);
+          // Remove the acted-on slide by identity; keep slideIdx pointing at the
+          // same visible image if an earlier item was the one removed.
+          const at = slideItems.findIndex((it) => it.rel === rel);
+          if (at !== -1) {
+            slideItems.splice(at, 1);
+            if (at < slideIdx) slideIdx--;
+          }
           slideSeen.delete(rel);
           if (slideItems.length === 0) {
             // The set may still hold more than this playlist sampled; try once.
@@ -1619,6 +1653,7 @@
         slideSeen = new Set();
         slideIdx = 0;
         slideExhausted = false;
+        slideErrorStreak = 0; // each run starts with a clean loop-guard count
         slideMetaOpen = false;
         slideFront = 0;
         slideLayers.forEach((l) => {
