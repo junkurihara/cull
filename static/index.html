@@ -266,7 +266,9 @@
       #slideshow.show {
         display: block;
       }
-      #slideimg {
+      /* Two stacked layers cross-fade on each advance: the incoming image fades
+         up as the outgoing one fades out, which reads softer than a hard swap. */
+      .slidelayer {
         position: absolute;
         inset: 0;
         width: 100%;
@@ -274,6 +276,16 @@
         object-fit: contain;
         user-select: none;
         -webkit-user-drag: none;
+        opacity: 0;
+        transition: opacity 0.6s ease;
+      }
+      .slidelayer.on {
+        opacity: 1;
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .slidelayer {
+          transition: opacity 0.2s ease;
+        }
       }
       #slidename {
         position: absolute;
@@ -288,6 +300,7 @@
         white-space: nowrap;
         background: linear-gradient(rgba(0, 0, 0, 0.6), rgba(0, 0, 0, 0));
         pointer-events: none;
+        transition: opacity 0.25s ease;
       }
       #slidebar {
         position: absolute;
@@ -297,8 +310,29 @@
         display: flex;
         gap: 8px;
         justify-content: center;
+        flex-wrap: wrap;
         padding: 10px 10px calc(10px + env(safe-area-inset-bottom));
         background: linear-gradient(rgba(0, 0, 0, 0), rgba(0, 0, 0, 0.6));
+        transition: opacity 0.25s ease;
+      }
+      #slidespeed {
+        font: inherit;
+        font-size: 12px;
+        background: #111;
+        color: #ccc;
+        border: 1px solid #444;
+        border-radius: 8px;
+        padding: 0 8px;
+      }
+      /* Idle: hide the chrome (and the mouse cursor) for an unobstructed view.
+         Revealed again on any pointer/key activity. */
+      #slideshow.chrome-hidden {
+        cursor: none;
+      }
+      #slideshow.chrome-hidden #slidename,
+      #slideshow.chrome-hidden #slidebar {
+        opacity: 0;
+        pointer-events: none;
       }
       /* Help overlay */
       #help {
@@ -567,12 +601,22 @@
       </div>
     </div>
     <div id="slideshow">
-      <img id="slideimg" alt="" />
+      <img id="slideimg" class="slidelayer" alt="" />
+      <img id="slideimg2" class="slidelayer" alt="" />
       <div id="slidename"></div>
       <div id="slidebar">
         <button id="slideprev" class="gact" type="button" aria-label="Previous">‹</button>
         <button id="slideplay" class="gact" type="button" aria-label="Play / pause">⏸</button>
         <button id="slidenext" class="gact" type="button" aria-label="Next">›</button>
+        <button id="sliderestore" class="gact" type="button">↩ restore</button>
+        <button id="slidetrash" class="gact" type="button">✗ trash</button>
+        <button id="slidemeta" class="gact" type="button">ⓘ meta</button>
+        <select id="slidespeed" aria-label="Slide interval">
+          <option value="2000">2s</option>
+          <option value="4000">4s</option>
+          <option value="6000">6s</option>
+          <option value="10000">10s</option>
+        </select>
         <button id="slideclose" class="gact" type="button">✕ close</button>
       </div>
     </div>
@@ -610,6 +654,10 @@
           <tr class="sect"><td colspan="2">Slideshow (▶ / p)</td></tr>
           <tr><td>Space / tap</td><td>play / pause</td></tr>
           <tr><td>← / → or swipe</td><td>previous / next</td></tr>
+          <tr><td>r / ↩</td><td>restore for re-triage</td></tr>
+          <tr><td>Del / ⌫ / ✗</td><td>trash</td></tr>
+          <tr><td>i / ⓘ</td><td>metadata (pauses)</td></tr>
+          <tr><td>2s–10s</td><td>auto-advance interval</td></tr>
           <tr><td>swipe ↓ / Esc / p</td><td>exit</td></tr>
           <tr class="sect"><td colspan="2">Status bar</td></tr>
           <tr><td>✓ / ✗</td><td>kept / trashed today (all devices)</td></tr>
@@ -661,10 +709,15 @@
         slidebtn: document.getElementById("slidebtn"),
         slideshow: document.getElementById("slideshow"),
         slideimg: document.getElementById("slideimg"),
+        slideimg2: document.getElementById("slideimg2"),
         slidename: document.getElementById("slidename"),
         slideprev: document.getElementById("slideprev"),
         slideplay: document.getElementById("slideplay"),
         slidenext: document.getElementById("slidenext"),
+        sliderestore: document.getElementById("sliderestore"),
+        slidetrash: document.getElementById("slidetrash"),
+        slidemeta: document.getElementById("slidemeta"),
+        slidespeed: document.getElementById("slidespeed"),
         slideclose: document.getElementById("slideclose"),
       };
 
@@ -1363,11 +1416,13 @@
       );
 
       // ---- random slideshow ----
-      // A BGM-style fullscreen view of random kept images. The playlist lives
-      // only on the client; the server reservoir-samples a fresh batch per
-      // request and holds no list (design.md §1).
-      const SLIDE_MS = 4000;
+      // A fullscreen view of random kept images that auto-advances and, like
+      // the gallery viewer, can restore / trash / inspect the current image.
+      // The playlist lives only on the client; the server reservoir-samples a
+      // fresh batch per request and holds no list (design.md §1).
+      const SLIDE_DEFAULT_MS = 4000;
       const SLIDE_BATCH = 30;
+      const SLIDE_CHROME_MS = 3000; // idle delay before the chrome auto-hides
       let slideOpen = false;
       let slideItems = []; // {rel, mtime} in shuffled order
       let slideIdx = 0;
@@ -1376,6 +1431,24 @@
       let slideSeen = new Set(); // rels already queued (dedup across batches)
       let slideLoading = false;
       let slideExhausted = false; // a batch added nothing new -> loop locally
+      let slideMetaOpen = false;
+      let slideBusy = false; // an action is in flight
+      let slideChromeTimer = null;
+      // Two <img> layers cross-faded on each advance; `slideFront` is the index
+      // of the one currently visible. A generation counter drops the reveal of
+      // an image that a newer advance has already superseded.
+      const slideLayers = [els.slideimg, els.slideimg2];
+      let slideFront = 0;
+      let slideGen = 0;
+
+      // Auto-advance interval, remembered across sessions. localStorage may be
+      // unavailable (private mode); fall back to the default silently.
+      let slideIntervalMs = SLIDE_DEFAULT_MS;
+      try {
+        const v = parseInt(localStorage.getItem("cullSlideMs") || "", 10);
+        if (v > 0) slideIntervalMs = v;
+      } catch (e) {}
+      els.slidespeed.value = String(slideIntervalMs);
 
       async function fetchSlideBatch() {
         if (slideLoading || slideExhausted) return;
@@ -1410,17 +1483,33 @@
         if (slideItems.length === 0) return;
         if (slideIdx >= slideItems.length) slideIdx = 0; // wrap
         const it = slideItems[slideIdx];
-        els.slideimg.src = keepImageUrl(it.rel);
-        els.slideimg.alt = it.rel;
         els.slidename.textContent =
           it.rel + (it.mtime ? " · " + new Date(it.mtime).toLocaleString() : "");
-        // Warm the next image so the transition is instant.
+        // Cross-fade: paint the incoming image into the hidden layer, then on
+        // load swap which layer is opaque.
+        const gen = ++slideGen;
+        const front = slideLayers[slideFront];
+        const back = slideLayers[1 - slideFront];
+        const reveal = () => {
+          if (gen !== slideGen) return; // a newer advance won
+          back.onload = null;
+          back.classList.add("on");
+          front.classList.remove("on");
+          slideFront = 1 - slideFront;
+        };
+        back.onload = reveal;
+        back.src = keepImageUrl(it.rel);
+        back.alt = it.rel;
+        if (back.complete && back.naturalWidth > 0) reveal();
+        // Warm the next image so its fade is instant.
         if (slideIdx + 1 < slideItems.length) {
           const pre = new Image();
           pre.src = keepImageUrl(slideItems[slideIdx + 1].rel);
         }
         // Pull the next batch in before reaching the tail.
         if (!slideExhausted && slideItems.length - slideIdx < 5) fetchSlideBatch();
+        // Keep an open metadata panel in step with the image on screen.
+        if (slideMetaOpen) fetchMetaInto(keepMetaUrl(it.rel));
       }
 
       function slideAdvance(delta) {
@@ -1437,7 +1526,7 @@
           slideTimer = setTimeout(() => {
             slideAdvance(1);
             scheduleSlide();
-          }, SLIDE_MS);
+          }, slideIntervalMs);
         }
       }
 
@@ -1445,6 +1534,81 @@
         slidePlaying = p;
         els.slideplay.textContent = p ? "⏸" : "▶";
         scheduleSlide();
+      }
+
+      // Reveal the chrome (name + control bar + cursor) and arm its idle hide.
+      // The panel stays put while the metadata panel is open (you are reading).
+      function showChrome() {
+        els.slideshow.classList.remove("chrome-hidden");
+        clearTimeout(slideChromeTimer);
+        slideChromeTimer = setTimeout(() => {
+          if (slideOpen && !slideMetaOpen) els.slideshow.classList.add("chrome-hidden");
+        }, SLIDE_CHROME_MS);
+      }
+
+      // Toggle the metadata panel for the current slide. Opening it pauses the
+      // auto-advance so the image does not change out from under you.
+      function toggleSlideMeta() {
+        if (slideItems.length === 0) return;
+        slideMetaOpen = !slideMetaOpen;
+        els.meta.classList.toggle("show", slideMetaOpen);
+        if (slideMetaOpen) {
+          setSlidePlaying(false);
+          fetchMetaInto(keepMetaUrl(slideItems[slideIdx].rel));
+        }
+        showChrome();
+      }
+
+      // Restore / trash the current slide via the existing keep endpoints, then
+      // drop it from the playlist and show the next. restore feeds the main
+      // backlog (and triggers its rebuild when the gallery closes), exactly as
+      // the gallery viewer does.
+      async function slideAct(action) {
+        if (slideBusy || slideItems.length === 0) return;
+        const idx = slideIdx;
+        const rel = slideItems[idx].rel;
+        slideBusy = true;
+        try {
+          const res = await fetch(api("api/keep/" + action), {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ relpath: rel }),
+          });
+          if (!res.ok) {
+            toast(action + " failed (" + res.status + ")");
+            return;
+          }
+          const data = await res.json();
+          updateStats(data.stats);
+          if (action === "restore") {
+            gRestored++;
+            if (backlog != null) {
+              backlog++;
+              updateCount();
+            }
+          }
+          toast(action === "restore" ? "Restored for re-triage" : "Moved to trash");
+          slideItems.splice(idx, 1);
+          slideSeen.delete(rel);
+          if (slideItems.length === 0) {
+            // The set may still hold more than this playlist sampled; try once.
+            slideExhausted = false;
+            await fetchSlideBatch();
+            if (!slideOpen) return;
+            if (slideItems.length === 0) {
+              toast("No kept images");
+              location.hash = "keep";
+              return;
+            }
+          }
+          if (slideIdx >= slideItems.length) slideIdx = 0; // splice may have shrunk past the tail
+          showSlide();
+          scheduleSlide(); // give the new image a full interval
+        } catch (e) {
+          toast(action + " failed");
+        } finally {
+          slideBusy = false;
+        }
       }
 
       async function startSlideshow() {
@@ -1455,7 +1619,14 @@
         slideSeen = new Set();
         slideIdx = 0;
         slideExhausted = false;
+        slideMetaOpen = false;
+        slideFront = 0;
+        slideLayers.forEach((l) => {
+          l.classList.remove("on");
+          l.removeAttribute("src");
+        });
         els.slideshow.classList.add("show");
+        showChrome();
         await fetchSlideBatch();
         if (!slideOpen) return; // closed again while the first batch loaded
         if (slideItems.length === 0) {
@@ -1473,8 +1644,16 @@
         slidePlaying = false;
         clearTimeout(slideTimer);
         slideTimer = null;
-        els.slideshow.classList.remove("show");
-        els.slideimg.removeAttribute("src");
+        clearTimeout(slideChromeTimer);
+        slideChromeTimer = null;
+        els.slideshow.classList.remove("show", "chrome-hidden");
+        slideLayers.forEach((l) => {
+          l.classList.remove("on");
+          l.removeAttribute("src");
+        });
+        // The shared meta panel must not linger over the gallery / main view.
+        slideMetaOpen = false;
+        els.meta.classList.remove("show");
       }
 
       els.slidebtn.addEventListener("click", () => {
@@ -1484,25 +1663,59 @@
       els.slideprev.addEventListener("click", () => {
         setSlidePlaying(false); // manual nav pauses the auto-advance
         slideAdvance(-1);
+        showChrome();
       });
       els.slidenext.addEventListener("click", () => {
         setSlidePlaying(false);
         slideAdvance(1);
+        showChrome();
       });
       els.slideplay.addEventListener("click", () => {
         els.slideplay.blur();
         setSlidePlaying(!slidePlaying);
+        showChrome();
+      });
+      els.sliderestore.addEventListener("click", () => {
+        els.sliderestore.blur();
+        slideAct("restore");
+        showChrome();
+      });
+      els.slidetrash.addEventListener("click", () => {
+        els.slidetrash.blur();
+        slideAct("trash");
+        showChrome();
+      });
+      els.slidemeta.addEventListener("click", () => {
+        els.slidemeta.blur();
+        toggleSlideMeta();
+      });
+      els.slidespeed.addEventListener("change", () => {
+        els.slidespeed.blur();
+        const v = parseInt(els.slidespeed.value, 10);
+        if (v > 0) {
+          slideIntervalMs = v;
+          try {
+            localStorage.setItem("cullSlideMs", String(v));
+          } catch (e) {}
+          scheduleSlide(); // apply immediately
+        }
+        showChrome();
       });
       els.slideclose.addEventListener("click", () => {
         location.hash = "keep";
       });
 
-      // Slideshow touch: tap = play/pause, horizontal swipe = prev/next,
-      // downward swipe = exit. Taps on the control bar reach their buttons.
+      // Moving the pointer reveals the chrome and restarts its idle timer.
+      els.slideshow.addEventListener("mousemove", showChrome);
+
+      // Slideshow touch: tap = play/pause (or close the meta panel if open),
+      // horizontal swipe = prev/next, downward swipe = exit. Taps on the
+      // control bar reach their own buttons; any touch reveals the chrome.
       let slideTouch = null;
       els.slideshow.addEventListener(
         "touchstart",
         (e) => {
+          showChrome();
           if (e.touches.length === 1) {
             slideTouch = { x: e.touches[0].clientX, y: e.touches[0].clientY };
           }
@@ -1518,7 +1731,12 @@
           const dy = t.clientY - slideTouch.y;
           slideTouch = null;
           if (Math.abs(dx) < SWIPE_MIN && Math.abs(dy) < SWIPE_MIN) {
-            if (e.target === els.slideimg) setSlidePlaying(!slidePlaying);
+            // A tap on the image area: close the meta panel if it is open
+            // (its buttons may be behind it), otherwise toggle play/pause.
+            if (e.target instanceof HTMLImageElement) {
+              if (slideMetaOpen) toggleSlideMeta();
+              else setSlidePlaying(!slidePlaying);
+            }
             return;
           }
           if (Math.abs(dx) > Math.abs(dy)) {
@@ -1550,6 +1768,7 @@
         // Slideshow is the topmost layer when running (it implies the gallery
         // is open underneath), so it claims keys first.
         if (slideOpen) {
+          showChrome(); // any key reveals the controls
           switch (e.key) {
             case " ":
             case "Spacebar":
@@ -1563,6 +1782,19 @@
             case "ArrowLeft":
               setSlidePlaying(false);
               slideAdvance(-1);
+              break;
+            case "i":
+            case "I":
+              toggleSlideMeta();
+              break;
+            case "Delete":
+            case "Backspace":
+              e.preventDefault(); // Backspace must not navigate back
+              slideAct("trash");
+              break;
+            case "r":
+            case "R":
+              slideAct("restore");
               break;
             case "Escape":
             case "p":
