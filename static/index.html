@@ -1653,6 +1653,7 @@
         slideSeen = new Set();
         slideIdx = 0;
         slideExhausted = false;
+        slideErrorStreak = 0; // each run starts with a clean loop-guard count
         slideMetaOpen = false;
         slideFront = 0;
         slideLayers.forEach((l) => {
