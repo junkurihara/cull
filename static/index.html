@@ -572,7 +572,8 @@
       <span id="count">…</span>
       <span id="stats"><span class="st-k"></span> <span class="st-t"></span></span>
       <span id="relpath"></span>
-      <span id="hints">→ keep · ← trash · ↓ skip · ⌫ undo · i meta · g gallery · ? help</span>
+      <span id="hints">→ keep · ← trash · ↓ skip · ⌫ undo · i meta · r refresh · g gallery · ? help</span>
+      <button id="refreshbtn" class="barbtn" type="button" aria-label="Refresh (pick up new images)">⟳</button>
       <button id="gallerybtn" class="barbtn" type="button" aria-label="Keep gallery">▦</button>
       <button id="helpbtn" class="barbtn" type="button" aria-label="Help">?</button>
     </div>
@@ -632,6 +633,7 @@
           <tr><td>↓</td><td>skip</td></tr>
           <tr><td>⌫</td><td>undo</td></tr>
           <tr><td>i</td><td>metadata panel</td></tr>
+          <tr><td>r</td><td>refresh (pick up new images)</td></tr>
           <tr><td>+ / − / 0</td><td>zoom in / out / reset</td></tr>
           <tr><td>g</td><td>keep gallery</td></tr>
           <tr><td>?</td><td>this help</td></tr>
@@ -693,6 +695,7 @@
         badge: document.getElementById("badge"),
         help: document.getElementById("help"),
         helpbtn: document.getElementById("helpbtn"),
+        refreshbtn: document.getElementById("refreshbtn"),
         gallery: document.getElementById("gallery"),
         gallerybtn: document.getElementById("gallerybtn"),
         gclose: document.getElementById("gclose"),
@@ -1891,6 +1894,10 @@
           case "I":
             toggleMeta();
             break;
+          case "r":
+          case "R":
+            refresh();
+            break;
           case "+":
           case "=":
             zoomAt(innerWidth / 2, innerHeight / 2, scale * 1.3);
@@ -2123,6 +2130,28 @@
         await bootstrap();
       }
       els.message.addEventListener("click", retry);
+
+      // Manual re-scan: pick up images generated since the page (or the last
+      // refresh) loaded, without reloading the page. Each `next` is already a
+      // fresh walk, but the client chases a forward cursor and stops at the
+      // drained end, so newly generated files (and, in desc order, anything
+      // above the cursor) only surface on a rebuild. This rebuilds the queue
+      // from the current backlog and re-counts — the same reset the gallery
+      // does on close. Skipped images reappear too (the documented refresh
+      // semantics). Gated on `busy` so an in-flight move is never disrupted.
+      function refresh() {
+        if (busy) return;
+        queue = [];
+        exhausted = false;
+        tailAfter = null;
+        toast("Refreshing…");
+        fetchCountInBackground();
+        bootstrap();
+      }
+      els.refreshbtn.addEventListener("click", () => {
+        els.refreshbtn.blur();
+        refresh();
+      });
 
       async function init() {
         render(); // show the scanning message right away, before any await
