@@ -752,11 +752,14 @@
       let backlog = null;
       // Guards against overlapping actions while a request is in flight.
       let busy = false;
-      // True while a bootstrap()/refill() cold-scan is running. refresh() bails
-      // on it so it cannot reset the queue out from under an in-flight refill
-      // loop (which would otherwise resume after its await and push stale
-      // entries into the freshly cleared queue).
-      let bootstrapping = false;
+      // Count of bootstrap()/refill() cold-scans in flight. refresh() bails
+      // while any is running so it cannot reset the queue out from under an
+      // in-flight refill loop (which would otherwise resume after its await and
+      // push stale entries into the freshly cleared queue). A refcount, not a
+      // boolean: bootstrap() is called from several places (some without await),
+      // so two can overlap — the first to finish must not clear the guard while
+      // the other is still running.
+      let bootstrapsInFlight = 0;
       let metaOpen = false;
       let toastTimer = null;
       // Set when fetching the first image failed (so we can offer a retry
@@ -2101,16 +2104,17 @@
       // first item the moment it arrives, so the screen is gated on a single
       // `next` walk, not on the backlog count plus the full lookahead.
       async function bootstrap() {
-        // Serialize cold scans: an in-flight bootstrap blocks refresh() so the
-        // queue/cursor can't be reset while this refill loop is awaiting.
-        bootstrapping = true;
+        // Mark a cold scan in flight so refresh() can't reset the queue/cursor
+        // while this refill loop is awaiting. Refcount so overlapping bootstraps
+        // each hold the guard until they individually finish.
+        bootstrapsInFlight++;
         try {
           loadError = false;
           if (queue.length === 0) render(); // immediate "scanning" feedback
           await refill();
           prefetch();
         } finally {
-          bootstrapping = false;
+          bootstrapsInFlight--;
         }
       }
 
@@ -2150,11 +2154,10 @@
       // above the cursor) only surface on a rebuild. This rebuilds the queue
       // from the current backlog and re-counts — the same reset the gallery
       // does on close. Skipped images reappear too (the documented refresh
-      // semantics). Gated on `busy` (an in-flight move) and `bootstrapping` (an
-      // in-flight cold scan), so it never clears the queue under a running
-      // refill loop.
+      // semantics). Gated on `busy` (an in-flight move) and any in-flight cold
+      // scan, so it never clears the queue under a running refill loop.
       function refresh() {
-        if (busy || bootstrapping) return;
+        if (busy || bootstrapsInFlight > 0) return;
         queue = [];
         exhausted = false;
         tailAfter = null;
