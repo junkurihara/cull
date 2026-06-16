@@ -54,6 +54,7 @@ HTTP and implements no auth of its own.
 | skip  | ↓         | swipe down  |
 | undo  | Backspace | swipe up    |
 | meta  | `i`       | tap         |
+| refresh | `r`     | `⟳` button  |
 | zoom  | `+` / `-` / `0` | pinch; tap to reset |
 | help  | `?`       | `?` button  |
 | keep gallery | `g` | `▦` button |
@@ -68,6 +69,12 @@ restarts. Set `TZ_OFFSET_HOURS` so "today" rolls over at your local midnight.
 state, so it reappears after a refresh. `undo` is a bounded, in-memory "take
 back the last move" stack (not a journal); it fails with HTTP 409 once the stack
 is empty or the moved file has been reclaimed externally.
+
+`refresh` (`r` / the `⟳` button) re-scans the source tree for images generated
+since the page loaded — handy when triaging while a generator keeps writing. It
+rebuilds the queue from the current backlog (equivalent to reloading the page
+without losing it): you resume from the start of the unprocessed set and skipped
+images reappear. The backlog count is re-fetched at the same time.
 
 ### Keep gallery
 
