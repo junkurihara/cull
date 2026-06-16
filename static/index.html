@@ -752,6 +752,11 @@
       let backlog = null;
       // Guards against overlapping actions while a request is in flight.
       let busy = false;
+      // True while a bootstrap()/refill() cold-scan is running. refresh() bails
+      // on it so it cannot reset the queue out from under an in-flight refill
+      // loop (which would otherwise resume after its await and push stale
+      // entries into the freshly cleared queue).
+      let bootstrapping = false;
       let metaOpen = false;
       let toastTimer = null;
       // Set when fetching the first image failed (so we can offer a retry
@@ -2096,10 +2101,17 @@
       // first item the moment it arrives, so the screen is gated on a single
       // `next` walk, not on the backlog count plus the full lookahead.
       async function bootstrap() {
-        loadError = false;
-        if (queue.length === 0) render(); // immediate "scanning" feedback
-        await refill();
-        prefetch();
+        // Serialize cold scans: an in-flight bootstrap blocks refresh() so the
+        // queue/cursor can't be reset while this refill loop is awaiting.
+        bootstrapping = true;
+        try {
+          loadError = false;
+          if (queue.length === 0) render(); // immediate "scanning" feedback
+          await refill();
+          prefetch();
+        } finally {
+          bootstrapping = false;
+        }
       }
 
       // The backlog count is a full O(n) walk; fetch it off the critical path
@@ -2138,9 +2150,11 @@
       // above the cursor) only surface on a rebuild. This rebuilds the queue
       // from the current backlog and re-counts — the same reset the gallery
       // does on close. Skipped images reappear too (the documented refresh
-      // semantics). Gated on `busy` so an in-flight move is never disrupted.
+      // semantics). Gated on `busy` (an in-flight move) and `bootstrapping` (an
+      // in-flight cold scan), so it never clears the queue under a running
+      // refill loop.
       function refresh() {
-        if (busy) return;
+        if (busy || bootstrapping) return;
         queue = [];
         exhausted = false;
         tailAfter = null;
