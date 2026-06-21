@@ -49,10 +49,10 @@ HTTP and implements no auth of its own.
 
 | Action | Keyboard | Touch |
 | --- | --- | --- |
-| keep  | →         | swipe right |
-| trash | ←         | swipe left  |
-| skip  | ↓         | swipe down  |
-| undo  | Backspace | swipe up    |
+| keep  | → or `k`  | swipe right |
+| trash | ← or `t`  | swipe left  |
+| skip  | ↓ or `s`  | swipe down  |
+| undo  | Backspace or `u` | swipe up |
 | meta  | `i`       | tap         |
 | refresh | `r`     | `⟳` button  |
 | zoom  | `+` / `-` / `0` | pinch; tap to reset |
@@ -83,9 +83,10 @@ button closes it) shows everything under `KEEP_DIR` as a thumbnail grid. The
 order is switchable (dropdown, or cycle with `s`): by modification time —
 which `rename(2)` preserves, so it equals generation time — newest or oldest
 first, or by name. Tap a thumbnail to view it full size, then **restore** it to the source
-tree for re-triage or demote it to **trash**. In the viewer, `i` / a tap on the
-image / the `ⓘ` button shows the same prompt metadata panel as the main view
-(served from `KEEP_DIR`). Gallery moves adjust the daily
+tree for re-triage (`r`) or demote it to **trash** (`t`). In the
+viewer, `i` / a tap on the image / the `ⓘ` button shows the same prompt metadata
+panel as the main view (served from `KEEP_DIR`) — the same one-key actions as the
+slideshow. Gallery moves adjust the daily
 totals but are not undoable via the main undo stack — the reverse of a restore
 is simply keeping the image again. Thumbnails (~320px JPEG) are generated on
 demand and cached in memory (32 MiB LRU); nothing is written to disk.
@@ -96,7 +97,10 @@ From the gallery, `p` or the `▶` button starts a fullscreen **random
 slideshow** of kept images (hash-routed as `#slides`, nested above the gallery
 so the phone back button steps back out). It auto-advances every few seconds;
 `Space` / a tap toggles play-pause, `←` / `→` (or horizontal swipe) step
-manually, and `Esc` / `p` / a downward swipe exits. The playlist is drawn from
+manually, and `Esc` / `p` / a downward swipe exits. The current image carries
+the same one-key actions as the gallery viewer: `r` **restores** it to the
+source for re-triage, `t` **trashes** it, and `i` toggles the **metadata**
+panel (which pauses the show). The playlist is drawn from
 `GET /api/keep/random`, which reservoir-samples the keep tree in a single pass
 without the server holding any image list; the client de-duplicates across
 batches and loops once the set is covered.

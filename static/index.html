@@ -572,7 +572,7 @@
       <span id="count">…</span>
       <span id="stats"><span class="st-k"></span> <span class="st-t"></span></span>
       <span id="relpath"></span>
-      <span id="hints">→ keep · ← trash · ↓ skip · ⌫ undo · i meta · r refresh · g gallery · ? help</span>
+      <span id="hints">→/k keep · ←/t trash · ↓/s skip · ⌫/u undo · i meta · r refresh · g gallery · ? help</span>
       <button id="refreshbtn" class="barbtn" type="button" aria-label="Refresh (pick up new images)">⟳</button>
       <button id="gallerybtn" class="barbtn" type="button" aria-label="Keep gallery">▦</button>
       <button id="helpbtn" class="barbtn" type="button" aria-label="Help">?</button>
@@ -628,10 +628,10 @@
       <div id="helpcard">
         <table>
           <tr class="sect"><td colspan="2">Keyboard</td></tr>
-          <tr><td>→</td><td>keep</td></tr>
-          <tr><td>←</td><td>trash</td></tr>
-          <tr><td>↓</td><td>skip</td></tr>
-          <tr><td>⌫</td><td>undo</td></tr>
+          <tr><td>→ / k</td><td>keep</td></tr>
+          <tr><td>← / t</td><td>trash</td></tr>
+          <tr><td>↓ / s</td><td>skip</td></tr>
+          <tr><td>⌫ / u</td><td>undo</td></tr>
           <tr><td>i</td><td>metadata panel</td></tr>
           <tr><td>r</td><td>refresh (pick up new images)</td></tr>
           <tr><td>+ / − / 0</td><td>zoom in / out / reset</td></tr>
@@ -653,13 +653,14 @@
           <tr><td>← / → or swipe</td><td>navigate</td></tr>
           <tr><td>s</td><td>cycle sort (date / name)</td></tr>
           <tr><td>i / tap / ⓘ</td><td>metadata panel</td></tr>
+          <tr><td>r / ↩</td><td>restore for re-triage</td></tr>
+          <tr><td>t / ✗</td><td>trash</td></tr>
           <tr><td>swipe ↓ / Esc</td><td>close viewer</td></tr>
-          <tr><td>restore</td><td>send back for re-triage</td></tr>
           <tr class="sect"><td colspan="2">Slideshow (▶ / p)</td></tr>
           <tr><td>Space / tap</td><td>play / pause</td></tr>
           <tr><td>← / → or swipe</td><td>previous / next</td></tr>
           <tr><td>r / ↩</td><td>restore for re-triage</td></tr>
-          <tr><td>Del / ⌫ / ✗</td><td>trash</td></tr>
+          <tr><td>t / ✗</td><td>trash</td></tr>
           <tr><td>i / ⓘ</td><td>metadata (pauses)</td></tr>
           <tr><td>2s–10s</td><td>auto-advance interval</td></tr>
           <tr><td>swipe ↓ / Esc / p</td><td>exit</td></tr>
@@ -1804,6 +1805,22 @@
 
       // ---- keyboard ----
       window.addEventListener("keydown", (e) => {
+        // Only bare shortcut keys should trigger triage actions. Leave modifier
+        // chords (Ctrl/Cmd/Alt) to the browser/OS, ignore keystrokes mid-IME
+        // composition, and ignore typing inside form controls (the gallery sort
+        // / slideshow speed <select>, or any input). Shift is deliberately NOT
+        // excluded so `?` and uppercase letters still fire.
+        if (e.ctrlKey || e.metaKey || e.altKey || e.isComposing) return;
+        const tgt = e.target;
+        if (
+          tgt &&
+          (tgt.tagName === "INPUT" ||
+            tgt.tagName === "TEXTAREA" ||
+            tgt.tagName === "SELECT" ||
+            tgt.isContentEditable)
+        ) {
+          return;
+        }
         // While the help overlay is up, any key just dismisses it; acting on
         // an image you cannot see would be an easy misfire.
         if (helpOpen) {
@@ -1833,9 +1850,11 @@
             case "I":
               toggleSlideMeta();
               break;
-            case "Delete":
-            case "Backspace":
-              e.preventDefault(); // Backspace must not navigate back
+            // `t` (not Del/Backspace) for trash: Backspace means undo in the
+            // triage view, so reusing it here would put a destructive action on
+            // a "safe" key (and on macOS the delete key emits Backspace).
+            case "t":
+            case "T":
               slideAct("trash");
               break;
             case "r":
@@ -1864,6 +1883,17 @@
               case "I":
                 toggleGalleryMeta();
                 break;
+              // Same one-key actions as the slideshow, for consistency. `t`
+              // (not Del/Backspace) for trash keeps the destructive action off
+              // the triage view's undo key.
+              case "r":
+              case "R":
+                galleryAct("restore");
+                break;
+              case "t":
+              case "T":
+                galleryAct("trash");
+                break;
               case "Escape":
                 closeViewer();
                 break;
@@ -1885,17 +1915,30 @@
           case "G":
             location.hash = "keep";
             break;
+          // Each action has a mnemonic letter alongside its arrow: k(eep),
+          // t(rash), s(kip), u(ndo). t=trash and i=meta match the gallery and
+          // slideshow, so those actions use one key everywhere.
           case "ArrowRight":
+          case "k":
+          case "K":
             decide("keep");
             break;
           case "ArrowLeft":
+          case "t":
+          case "T":
             decide("trash");
             break;
           case "ArrowDown":
+          case "s":
+          case "S":
             skip();
             break;
           case "Backspace":
             e.preventDefault(); // do not navigate back
+            undo();
+            break;
+          case "u":
+          case "U":
             undo();
             break;
           case "i":
