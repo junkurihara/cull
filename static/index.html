@@ -1821,6 +1821,14 @@
         ) {
           return;
         }
+        // In the overlay layers (gallery, slideshow) Backspace/Delete map to no
+        // action, but some browsers still treat Backspace as "navigate back",
+        // which would tear down the overlay (and app state) unexpectedly.
+        // Suppress their default while an overlay is up. The main view handles
+        // Backspace itself (undo) and preventDefaults it there.
+        if ((e.key === "Backspace" || e.key === "Delete") && (slideOpen || galleryOpen)) {
+          e.preventDefault();
+        }
         // While the help overlay is up, any key just dismisses it; acting on
         // an image you cannot see would be an easy misfire.
         if (helpOpen) {
