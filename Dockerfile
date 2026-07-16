@@ -3,7 +3,7 @@
 # ---- builder ----------------------------------------------------------------
 # Full (non-slim) image so linking always works; the runtime image is separate
 # so this layer's size does not matter. Pinned to the toolchain used in dev.
-FROM rust:1.96-bookworm AS builder
+FROM rust:1.97-bookworm AS builder
 WORKDIR /build
 
 # The SPA is embedded via include_str! at compile time, so static/ must be
